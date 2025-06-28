@@ -1,7 +1,17 @@
 "use client"
 
-import { useState } from "react"
-import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native"
+import { useState, useRef } from "react"
+import {
+  Alert,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+  PanResponder,
+  Animated,
+  Dimensions,
+} from "react-native"
 
 interface GridCell {
   type: "clue" | "letter" | "empty" | "special" | "icon"
@@ -9,6 +19,14 @@ interface GridCell {
   id: string
   placed?: boolean
   placedBy?: "You" | "Opponent"
+}
+
+interface DragState {
+  isDragging: boolean
+  draggedLetter: string | null
+  draggedIndex: number | null
+  dragPosition: { x: number; y: number }
+  targetCell: { row: number; col: number } | null
 }
 
 // Define the crossword puzzle layout matching the image
@@ -184,15 +202,14 @@ const solutionGrid: string[][] = [
 // Define word patterns - only for COMPLETE rows and columns
 const wordPatterns = {
   completeRows: [
-    { row: 1, word: "ABASE", name: "Row 1 Complete" }, 
+    { row: 1, word: "ABASE", name: "Row 1 Complete" },
     { row: 11, word: "ENTU", name: "Row 11 Complete" },
-    { row: 15, word: "THUUH", name: "Row 15 Complete" }, 
+    { row: 15, word: "THUUH", name: "Row 15 Complete" },
   ],
-  // Complete columns that form words when all letters are filled
   completeColumns: [
     { col: 1, word: "ACKNOWLEDGEABLE", name: "Column 1 Complete" },
-    { col: 2, word: "THEANHH", name: "Column 2 Complete" }, 
-    { col: 3, word: "FEETHHU", name: "Column 3 Complete" }, 
+    { col: 2, word: "THEANHH", name: "Column 2 Complete" },
+    { col: 3, word: "FEETHHU", name: "Column 3 Complete" },
   ],
 }
 
@@ -205,17 +222,15 @@ const checkCompletedWords = (
 ) => {
   const newlyCompleted: string[] = []
 
-  // Check complete ROWS (like how it currently works)
+  // Check complete ROWS
   wordPatterns.completeRows.forEach(({ row, word, name }) => {
     let isComplete = true
     let currentWord = ""
     let letterCount = 0
 
-    // Check all positions in this row that should have letters
     for (let col = 0; col < gridState[row].length; col++) {
       const expectedLetter = solutionGrid[row][col]
       if (expectedLetter) {
-        // Only check positions that should have letters
         const cell = gridState[row][col]
         if (!cell.text || cell.text.toUpperCase() !== expectedLetter.toUpperCase()) {
           isComplete = false
@@ -237,17 +252,15 @@ const checkCompletedWords = (
     }
   })
 
-  // Check complete COLUMNS (same logic as rows)
+  // Check complete COLUMNS
   wordPatterns.completeColumns.forEach(({ col, word, name }) => {
     let isComplete = true
     let currentWord = ""
     let letterCount = 0
 
-    // Check all positions in this column that should have letters
     for (let row = 0; row < gridState.length; row++) {
       const expectedLetter = solutionGrid[row][col]
       if (expectedLetter) {
-        // Only check positions that should have letters
         const cell = gridState[row][col]
         if (!cell.text || cell.text.toUpperCase() !== expectedLetter.toUpperCase()) {
           isComplete = false
@@ -274,26 +287,40 @@ const checkCompletedWords = (
   }
 }
 
-// All possible letters that can appear in the solution
 const allAvailableLetters = ["A", "T", "L", "F", "E", "H", "C", "I", "P", "A", "N", "U", "K", "D"]
-
 const initialLetters = ["L", "H", "A", "O", "E"]
 
-export default function CrosswordPuzzleGame() {
+const { width: screenWidth, height: screenHeight } = Dimensions.get("window")
+
+export default function CrosswordPuzzleGameWithDragDropFixed() {
   const [grid, setGrid] = useState<GridCell[][]>(puzzleData.grid)
   const [letterDeck, setLetterDeck] = useState(initialLetters)
-  const [selectedLetterIndex, setSelectedLetterIndex] = useState<number | null>(null)
   const [currentPlayer, setCurrentPlayer] = useState<"You" | "Opponent">("You")
-  const [scores, setScores] = useState({ You: 0, Opponent: 7 }) // Match the image scores
+  const [scores, setScores] = useState({ You: 0, Opponent: 7 })
   const [gameHistory, setGameHistory] = useState<string[]>([])
   const [completedWords, setCompletedWords] = useState<string[]>([])
 
+  // Drag and Drop State
+  const [dragState, setDragState] = useState<DragState>({
+    isDragging: false,
+    draggedLetter: null,
+    draggedIndex: null,
+    dragPosition: { x: 0, y: 0 },
+    targetCell: null,
+  })
+
+  // Animated values for drag feedback
+  const draggedLetterOpacity = useRef(new Animated.Value(1)).current
+  const draggedLetterScale = useRef(new Animated.Value(1)).current
+
+  // Refs to store cell positions for drop detection
+  const cellRefs = useRef<{ [key: string]: { x: number; y: number; width: number; height: number } }>({})
+  const boardRef = useRef<View>(null)
+
   const isEmptyCell = (cell: GridCell) => cell.type === "empty" && !cell.text
 
-  // Function to get needed letters for remaining empty cells
   const getNeededLetters = () => {
     const neededLetters: string[] = []
-
     grid.forEach((row, rowIndex) => {
       row.forEach((cell, colIndex) => {
         if (isEmptyCell(cell)) {
@@ -304,16 +331,13 @@ export default function CrosswordPuzzleGame() {
         }
       })
     })
-
     return neededLetters
   }
 
-  // Function to refill letter deck when empty
   const refillLetterDeck = () => {
     if (letterDeck.length === 0) {
       const neededLetters = getNeededLetters()
       if (neededLetters.length > 0) {
-        // Give 5 random letters from needed letters (with possible duplicates)
         const newDeck: string[] = []
         for (let i = 0; i < 5; i++) {
           const randomLetter = neededLetters[Math.floor(Math.random() * neededLetters.length)]
@@ -322,7 +346,6 @@ export default function CrosswordPuzzleGame() {
         setLetterDeck(newDeck)
         setGameHistory((prev) => [...prev, `🔄 New letters provided: ${newDeck.join(", ")}`])
       } else {
-        // If no more letters needed, give random letters from all available
         const newDeck: string[] = []
         for (let i = 0; i < 5; i++) {
           const randomLetter = allAvailableLetters[Math.floor(Math.random() * allAvailableLetters.length)]
@@ -334,7 +357,101 @@ export default function CrosswordPuzzleGame() {
     }
   }
 
-  const placeLetter = (rowIndex: number, colIndex: number) => {
+  // Function to detect which cell is under the drag position
+  const getCellUnderPosition = (x: number, y: number) => {
+    for (const [key, position] of Object.entries(cellRefs.current)) {
+      if (x >= position.x && x <= position.x + position.width && y >= position.y && y <= position.y + position.height) {
+        const [row, col] = key.split("-").map(Number)
+        return { row, col }
+      }
+    }
+    return null
+  }
+
+  // Create PanResponder for drag and drop
+  const createLetterPanResponder = (letterIndex: number) => {
+    return PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+
+      onPanResponderGrant: (evt) => {
+        if (currentPlayer !== "You") return
+
+        const letter = letterDeck[letterIndex]
+        setDragState({
+          isDragging: true,
+          draggedLetter: letter,
+          draggedIndex: letterIndex,
+          dragPosition: { x: evt.nativeEvent.pageX, y: evt.nativeEvent.pageY },
+          targetCell: null,
+        })
+
+        // Animate the dragged letter
+        Animated.parallel([
+          Animated.timing(draggedLetterOpacity, {
+            toValue: 0.8,
+            duration: 150,
+            useNativeDriver: true,
+          }),
+          Animated.timing(draggedLetterScale, {
+            toValue: 1.2,
+            duration: 150,
+            useNativeDriver: true,
+          }),
+        ]).start()
+      },
+
+      onPanResponderMove: (evt) => {
+        if (!dragState.isDragging) return
+
+        const newPosition = { x: evt.nativeEvent.pageX, y: evt.nativeEvent.pageY }
+        const targetCell = getCellUnderPosition(newPosition.x, newPosition.y)
+
+        setDragState((prev) => ({
+          ...prev,
+          dragPosition: newPosition,
+          targetCell,
+        }))
+      },
+
+      onPanResponderRelease: (evt) => {
+        if (!dragState.isDragging) return
+
+        const dropPosition = { x: evt.nativeEvent.pageX, y: evt.nativeEvent.pageY }
+        const targetCell = getCellUnderPosition(dropPosition.x, dropPosition.y)
+
+        // Reset animations
+        Animated.parallel([
+          Animated.timing(draggedLetterOpacity, {
+            toValue: 1,
+            duration: 150,
+            useNativeDriver: true,
+          }),
+          Animated.timing(draggedLetterScale, {
+            toValue: 1,
+            duration: 150,
+            useNativeDriver: true,
+          }),
+        ]).start()
+
+        if (targetCell && dragState.draggedLetter && dragState.draggedIndex !== null) {
+          // Attempt to place the letter
+          placeLetter(targetCell.row, targetCell.col, dragState.draggedIndex, dragState.draggedLetter)
+        }
+
+        // Reset drag state
+        setDragState({
+          isDragging: false,
+          draggedLetter: null,
+          draggedIndex: null,
+          dragPosition: { x: 0, y: 0 },
+          targetCell: null,
+        })
+      },
+    })
+  }
+
+  const placeLetter = (rowIndex: number, colIndex: number, letterIndex: number, letter: string) => {
     if (currentPlayer === "Opponent") return
 
     const cell = grid[rowIndex][colIndex]
@@ -344,31 +461,20 @@ export default function CrosswordPuzzleGame() {
       return
     }
 
-    if (selectedLetterIndex === null) {
-      Alert.alert("Select Letter", "Please select a letter from your deck first.")
-      return
-    }
-
-    const placedLetter = letterDeck[selectedLetterIndex]
     const correctLetter = solutionGrid[rowIndex][colIndex]
-
-    // Check if the placed letter matches the correct answer
     let isCorrect = false
-    if (correctLetter && placedLetter.toUpperCase() === correctLetter.toUpperCase()) {
+
+    if (correctLetter && letter.toUpperCase() === correctLetter.toUpperCase()) {
       isCorrect = true
       setScores((prev) => ({ ...prev, You: prev.You + 1 }))
-      setGameHistory((prev) => [
-        ...prev,
-        `✅ Correct! +1 point for placing ${placedLetter} at (${rowIndex},${colIndex})`,
-      ])
+      setGameHistory((prev) => [...prev, `✅ Correct! +1 point for placing ${letter} at (${rowIndex},${colIndex})`])
 
-      // Only place the letter if it's correct
       const newGrid = grid.map((row, rIdx) =>
         row.map((cell, cIdx) => {
           if (rIdx === rowIndex && cIdx === colIndex) {
             return {
               ...cell,
-              text: placedLetter,
+              text: letter,
               type: "letter" as const,
               placed: true,
               placedBy: currentPlayer,
@@ -379,26 +485,19 @@ export default function CrosswordPuzzleGame() {
       )
       setGrid(newGrid)
 
-      // Check for completed words after placing the letter
       setTimeout(() => {
         checkCompletedWords(newGrid, completedWords, setCompletedWords, setScores, setGameHistory)
       }, 100)
     } else {
       setScores((prev) => ({ ...prev, You: Math.max(0, prev.You - 1) }))
-      setGameHistory((prev) => [
-        ...prev,
-        `❌ Wrong! -1 point. Expected: ${correctLetter || "None"}, Got: ${placedLetter}`,
-      ])
+      setGameHistory((prev) => [...prev, `❌ Wrong! -1 point. Expected: ${correctLetter || "None"}, Got: ${letter}`])
     }
 
-    // Remove the letter from deck regardless of correct/incorrect
+    // Remove the letter from deck
     const newDeck = [...letterDeck]
-    newDeck.splice(selectedLetterIndex, 1)
+    newDeck.splice(letterIndex, 1)
     setLetterDeck(newDeck)
 
-    setSelectedLetterIndex(null)
-
-    // Check if deck is empty and refill if needed
     setTimeout(() => {
       refillLetterDeck()
     }, 500)
@@ -413,14 +512,12 @@ export default function CrosswordPuzzleGame() {
 
     setCurrentPlayer(currentPlayer === "You" ? "Opponent" : "You")
 
-    // Refill deck when passing turn if empty
     if (letterDeck.length === 0) {
       refillLetterDeck()
     }
   }
 
   const aiTurn = () => {
-    // Simple AI that places a random letter
     const emptyCells: [number, number][] = []
 
     grid.forEach((row, rowIndex) => {
@@ -437,9 +534,7 @@ export default function CrosswordPuzzleGame() {
       const letter = aiLetters[Math.floor(Math.random() * aiLetters.length)]
 
       const correctLetter = solutionGrid[row][col]
-      let isCorrect = false
       if (correctLetter && letter.toUpperCase() === correctLetter.toUpperCase()) {
-        isCorrect = true
         setScores((prev) => ({ ...prev, Opponent: prev.Opponent + 1 }))
         setGameHistory((prev) => [...prev, `AI got +1 point for placing ${letter} correctly`])
       }
@@ -468,15 +563,25 @@ export default function CrosswordPuzzleGame() {
   const resetGame = () => {
     setGrid(puzzleData.grid)
     setLetterDeck(initialLetters)
-    setSelectedLetterIndex(null)
     setCurrentPlayer("You")
     setScores({ You: 0, Opponent: 0 })
     setGameHistory([])
     setCompletedWords([])
+    setDragState({
+      isDragging: false,
+      draggedLetter: null,
+      draggedIndex: null,
+      dragPosition: { x: 0, y: 0 },
+      targetCell: null,
+    })
   }
 
-  const getCellStyle = (cell: GridCell) => {
+  const getCellStyle = (cell: GridCell, rowIndex: number, colIndex: number) => {
     const baseStyle = [styles.cell]
+
+    // Highlight target cell during drag
+    const isTargetCell = dragState.targetCell?.row === rowIndex && dragState.targetCell?.col === colIndex
+    const canDrop = isEmptyCell(cell) && dragState.isDragging
 
     switch (cell.type) {
       case "clue":
@@ -484,13 +589,13 @@ export default function CrosswordPuzzleGame() {
       case "letter":
         return [...baseStyle, styles.letterCell]
       case "empty":
-        return [...baseStyle, styles.emptyCell]
+        return [...baseStyle, styles.emptyCell, isTargetCell && canDrop && styles.targetCell]
       case "special":
         return [...baseStyle, styles.specialCell]
       case "icon":
         return [...baseStyle, styles.iconCell]
       default:
-        return [...baseStyle, styles.emptyCell]
+        return [...baseStyle, styles.emptyCell, isTargetCell && canDrop && styles.targetCell]
     }
   }
 
@@ -501,7 +606,7 @@ export default function CrosswordPuzzleGame() {
         <TouchableOpacity style={styles.backButton}>
           <Text style={styles.backButtonText}>←</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Puzzle</Text>
+        <Text style={styles.title}>Puzzle 2</Text>
         <TouchableOpacity style={styles.settingsButton}>
           <Text style={styles.settingsButtonText}>⚙️</Text>
         </TouchableOpacity>
@@ -517,20 +622,33 @@ export default function CrosswordPuzzleGame() {
         <View style={styles.scoreSection}>
           <Text style={styles.scoreLabel}>Opponent</Text>
           <Text style={styles.scoreValue}>{scores.Opponent}</Text>
-
         </View>
       </View>
 
       {/* Game Board */}
       <ScrollView style={styles.boardContainer} showsVerticalScrollIndicator={false}>
-        <View style={styles.board}>
+        <View
+          ref={boardRef}
+          style={styles.board}
+          onLayout={(event) => {
+            // Store board position for accurate drop detection
+            boardRef.current?.measureInWindow((x, y, width, height) => {
+              // This gives us the board's position relative to the screen
+            })
+          }}
+        >
           {grid.map((row, rowIndex) => (
             <View key={rowIndex} style={styles.row}>
               {row.map((cell, colIndex) => (
                 <TouchableOpacity
                   key={`${rowIndex}-${colIndex}`}
-                  style={getCellStyle(cell)}
-                  onPress={() => placeLetter(rowIndex, colIndex)}
+                  style={getCellStyle(cell, rowIndex, colIndex)}
+                  onLayout={(event) => {
+                    // Measure cell position relative to the window (screen)
+                    event.target.measureInWindow((x, y, width, height) => {
+                      cellRefs.current[`${rowIndex}-${colIndex}`] = { x, y, width, height }
+                    })
+                  }}
                 >
                   <Text
                     style={[
@@ -549,25 +667,53 @@ export default function CrosswordPuzzleGame() {
         </View>
       </ScrollView>
 
-      {/* Letter Deck */}
+      {/* Letter Deck with Drag and Drop */}
       {currentPlayer === "You" && (
         <View style={styles.letterDeckContainer}>
+          <Text style={styles.deckTitle}>🎯 Drag letters to the board:</Text>
           <View style={styles.letterDeck}>
-            {letterDeck.map((letter, index) => (
-              <TouchableOpacity
-                key={index}
-                style={[styles.letterTile, selectedLetterIndex === index && styles.selectedLetterTile]}
-                onPress={() => setSelectedLetterIndex(index)}
-              >
-                <Text style={styles.letterTileText}>{letter}</Text>
-              </TouchableOpacity>
-            ))}
+            {letterDeck.map((letter, index) => {
+              const panResponder = createLetterPanResponder(index)
+              const isDraggedLetter = dragState.draggedIndex === index && dragState.isDragging
+
+              return (
+                <Animated.View
+                  key={index}
+                  {...panResponder.panHandlers}
+                  style={[
+                    styles.letterTile,
+                    isDraggedLetter && {
+                      opacity: draggedLetterOpacity,
+                      transform: [{ scale: draggedLetterScale }],
+                    },
+                  ]}
+                >
+                  <Text style={styles.letterTileText}>{letter}</Text>
+                </Animated.View>
+              )
+            })}
           </View>
           {letterDeck.length === 0 && (
             <TouchableOpacity style={styles.refillButton} onPress={refillLetterDeck}>
               <Text style={styles.refillButtonText}>🔄 Get New Letters</Text>
             </TouchableOpacity>
           )}
+        </View>
+      )}
+
+      {/* Floating Dragged Letter */}
+      {dragState.isDragging && dragState.draggedLetter && (
+        <View
+          style={[
+            styles.floatingLetter,
+            {
+              left: dragState.dragPosition.x - 25,
+              top: dragState.dragPosition.y - 25,
+            },
+          ]}
+          pointerEvents="none"
+        >
+          <Text style={styles.floatingLetterText}>{dragState.draggedLetter}</Text>
         </View>
       )}
 
@@ -586,30 +732,17 @@ export default function CrosswordPuzzleGame() {
         </View>
       )}
 
-      {/* Completed Words Display */}
-      {/* {completedWords.length > 0 && (
-        <View style={styles.completedContainer}>
-          <Text style={styles.completedTitle}>🏆 Completed Lines:</Text>
-          <Text style={styles.completedText}>
-            {completedWords.filter((w) => w.startsWith("complete-row")).length} complete rows +{" "}
-            {completedWords.filter((w) => w.startsWith("complete-column")).length} complete columns finished!
+      {/* Debug Info - Remove this in production */}
+      {dragState.isDragging && (
+        <View style={styles.debugInfo}>
+          <Text style={styles.debugText}>
+            Drag: ({Math.round(dragState.dragPosition.x)}, {Math.round(dragState.dragPosition.y)})
+          </Text>
+          <Text style={styles.debugText}>
+            Target: {dragState.targetCell ? `(${dragState.targetCell.row}, ${dragState.targetCell.col})` : "None"}
           </Text>
         </View>
-      )} */}
-
-      {/* Game History */}
-      {/* {gameHistory.length > 0 && (
-        <View style={styles.historyContainer}>
-          <Text style={styles.historyTitle}>Game Log:</Text>
-          <ScrollView style={styles.historyScroll} showsVerticalScrollIndicator={false}>
-            {gameHistory.slice(-3).map((entry, index) => (
-              <Text key={index} style={styles.historyText}>
-                {entry}
-              </Text>
-            ))}
-          </ScrollView>
-        </View>
-      )} */}
+      )}
 
       {/* Reset Button */}
       <TouchableOpacity style={styles.resetButton} onPress={resetGame}>
@@ -732,6 +865,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#E0E0E0",
   },
+  targetCell: {
+    backgroundColor: "#4CAF50",
+    borderColor: "#2E7D32",
+    borderWidth: 2,
+    transform: [{ scale: 1.1 }],
+  },
   specialCell: {
     width: 45,
     height: 45,
@@ -773,6 +912,16 @@ const styles = StyleSheet.create({
   letterDeckContainer: {
     alignItems: "center",
     paddingVertical: 5,
+    backgroundColor: "white",
+    marginHorizontal: 10,
+    borderRadius: 10,
+    marginBottom: 10,
+  },
+  deckTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#333",
+    marginBottom: 10,
   },
   letterDeck: {
     flexDirection: "row",
@@ -782,21 +931,43 @@ const styles = StyleSheet.create({
   },
   letterTile: {
     backgroundColor: "#F5DEB3",
-    width: 45,
-    height: 45,
-    borderRadius: 8,
+    width: 50,
+    height: 50,
+    borderRadius: 10,
     justifyContent: "center",
     alignItems: "center",
     marginHorizontal: 5,
     borderWidth: 2,
     borderColor: "#D2B48C",
-  },
-  selectedLetterTile: {
-    backgroundColor: "#FFD700",
-    borderColor: "#FFA500",
-    transform: [{ scale: 1.1 }],
+    elevation: 3,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
   },
   letterTileText: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#8B4513",
+  },
+  floatingLetter: {
+    position: "absolute",
+    width: 50,
+    height: 50,
+    backgroundColor: "#FFD700",
+    borderRadius: 10,
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 2,
+    borderColor: "#FFA500",
+    elevation: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    zIndex: 1000,
+  },
+  floatingLetterText: {
     fontSize: 20,
     fontWeight: "bold",
     color: "#8B4513",
@@ -854,46 +1025,18 @@ const styles = StyleSheet.create({
   hintButtonText: {
     fontSize: 18,
   },
-  completedContainer: {
-    backgroundColor: "#4CAF50",
-    marginHorizontal: 20,
-    borderRadius: 10,
-    padding: 15,
-    marginBottom: 10,
-    alignItems: "center",
+  debugInfo: {
+    position: "absolute",
+    top: 100,
+    right: 10,
+    backgroundColor: "rgba(0,0,0,0.7)",
+    padding: 10,
+    borderRadius: 5,
+    zIndex: 999,
   },
-  completedTitle: {
-    fontSize: 16,
-    fontWeight: "600",
+  debugText: {
     color: "white",
-    marginBottom: 5,
-  },
-  completedText: {
-    fontSize: 14,
-    color: "white",
-    textAlign: "center",
-  },
-  historyContainer: {
-    backgroundColor: "white",
-    marginHorizontal: 20,
-    borderRadius: 10,
-    padding: 15,
-    marginBottom: 10,
-    maxHeight: 100,
-  },
-  historyTitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#333",
-    marginBottom: 5,
-  },
-  historyScroll: {
-    maxHeight: 60,
-  },
-  historyText: {
     fontSize: 12,
-    color: "#666",
-    marginBottom: 2,
   },
   resetButton: {
     backgroundColor: "#e67e22",
