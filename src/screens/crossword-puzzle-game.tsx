@@ -1,911 +1,2280 @@
 "use client"
 
-import { useState } from "react"
-import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native"
+import React, { useEffect, useMemo, useRef, useState } from "react"
+import { useGame } from "../context/GameContext";
+import { Alert, Image, StyleSheet, Text, TouchableOpacity, View } from "react-native"
+import { GridCell, TurnPlacement, DeckItem } from "../types"
+import { allAvailableLetters, initialLetters, puzzleData, solutionGrid } from "../levels/level1"
+import { styles, CELL_SIZE } from "../styleSheet/styles"
+import {
+  getCellStyle,
+  checkCompletedWords,
+  refillLetterDeck,
+  aiTurn,
+  placeLetter,
+  passTurn,
+  resetGame,
+  recordTentativePlacement,
+  placeLetterAt,
+  placeLetterByChar,
+  cancelTentativePlacements,
+  submitTurn,
+  swapTiles,
+  swapTilesAndPass,
+  buildSmartDeck,
+  detectCompletedWords
+} from "../hooks/logic"
+import DraggableTileLayer from "../components/DraggableTileLayer";
+import LinearGradient from 'react-native-linear-gradient';
+import SwapModal from "../components/SwapModal";
+import AdBanner from '../components/AdBanner';
+import { useHints, HintButton } from "../hooks/useHints";
+import { computeAiMove } from "../ai/aiDecision";
+import AiBubbleOverlay from "../components/AiBubbleOverlay";
+import ScoreOverlay, { ScoreOverlayHandle } from "../components/ScoreOverlay";
+import AnimatedScore from "../components/AnimatedScore";
+import { submitTurnTransaction } from '../firebase/matchService';
+import { getApp } from '@react-native-firebase/app';
+import { getAuth } from '@react-native-firebase/auth';
+import { getDatabase } from '@react-native-firebase/database';
+import { handleExpireMultiplayer, handleSubmitMultiplayer } from '../utils/multiplayerSubmit';
+import TurnTimer from "../components/TurnTimer";
+import LivesIndicator from '../components/LivesIndicator';
+import Chat from '../components/Chat';
+import { useNavigation } from "@react-navigation/native";
+import InGameBanner from "../components/InGameBanner";
+import { notify } from '../utils/notificationCenter';
+import { unstable_batchedUpdates, InteractionManager } from 'react-native';
+import PreGameCountdown from "../components/PreGameCountdown";
+import OutOfLivesModal from "../components/OutOfLivesModal";
+import { getLevelModule } from '../levels';
+import { updateMatchSettings } from '../firebase/matchService';
 
-interface GridCell {
-  type: "clue" | "letter" | "empty" | "special" | "icon"
-  text: string
-  id: string
-  placed?: boolean
-  placedBy?: "You" | "Opponent"
-}
 
-// Define the crossword puzzle layout matching the image
-const puzzleData: { grid: GridCell[][] } = {
-  grid: [
-    [
-      { type: "clue", text: "OTHER", id: "other" },
-      { type: "clue", text: "EASTERN TIME", id: "eastern" },
-      { type: "clue", text: "CHEESE", id: "cheese" },
-      { type: "special", text: "@", id: "at" },
-      { type: "clue", text: "NOUN", id: "noun" },
-      { type: "clue", text: "CHEMICAL ENGINEER", id: "chemical" },
-      { type: "icon", text: "🎒", id: "bag" },
-    ],
-    [
-      { type: "icon", text: "🛡️", id: "shield" },
-      { type: "empty", text: "", id: "1-1" },
-      { type: "empty", text: "", id: "1-2" },
-      { type: "letter", text: "P", id: "1-3", placed: true },
-      { type: "letter", text: "L", id: "1-4", placed: true },
-      { type: "empty", text: "", id: "1-5" },
-      { type: "letter", text: "C", id: "1-6", placed: true },
-    ],
-    [
-      { type: "clue", text: "THING", id: "thing" },
-      { type: "letter", text: "C", id: "2-1", placed: true },
-      { type: "empty", text: "", id: "2-2" },
-      { type: "empty", text: "", id: "2-3" },
-      { type: "clue", text: "HECTARE", id: "hectare" },
-      { type: "empty", text: "", id: "2-5" },
-      { type: "empty", text: "", id: "2-6" },
-    ],
-    [
-      { type: "empty", text: "", id: "3-0" },
-      { type: "empty", text: "", id: "3-1" },
-      { type: "empty", text: "", id: "3-2" },
-      { type: "empty", text: "", id: "3-3" },
-      { type: "clue", text: "TABLET AND", id: "tablet" },
-      { type: "empty", text: "", id: "3-5" },
-      { type: "empty", text: "", id: "3-6" },
-    ],
-    [
-      { type: "clue", text: "FALSE", id: "false" },
-      { type: "letter", text: "N", id: "4-1", placed: true },
-      { type: "clue", text: "NARROW", id: "narrow" },
-      { type: "empty", text: "", id: "4-3" },
-      { type: "letter", text: "P", id: "4-4", placed: true },
-      { type: "empty", text: "", id: "4-5" },
-      { type: "empty", text: "", id: "4-6" },
-    ],
-    [
-      { type: "empty", text: "", id: "5-0" },
-      { type: "empty", text: "", id: "5-1" },
-      { type: "clue", text: "START", id: "start" },
-      { type: "empty", text: "", id: "5-3" },
-      { type: "empty", text: "", id: "5-4" },
-      { type: "clue", text: "NORTH", id: "north" },
-      { type: "empty", text: "", id: "5-6" },
-    ],
-    [
-      { type: "clue", text: "FLAP", id: "flap" },
-      { type: "letter", text: "W", id: "6-1", placed: true },
-      { type: "empty", text: "", id: "6-2" },
-      { type: "empty", text: "", id: "6-3" },
-      { type: "empty", text: "", id: "6-4" },
-      { type: "clue", text: "WITHOUT", id: "without" },
-      { type: "empty", text: "", id: "6-6" },
-    ],
-    [
-      { type: "empty", text: "", id: "7-0" },
-      { type: "empty", text: "", id: "7-1" },
-      { type: "empty", text: "", id: "7-2" },
-      { type: "empty", text: "", id: "7-3" },
-      { type: "empty", text: "", id: "7-4" },
-      { type: "empty", text: "", id: "7-5" },
-      { type: "clue", text: "TOGETHER", id: "together" },
-    ],
-    [
-      { type: "clue", text: "EACH", id: "each" },
-      { type: "letter", text: "E", id: "8-1", placed: true },
-      { type: "empty", text: "", id: "8-2" },
-      { type: "clue", text: "RULE", id: "rule" },
-      { type: "empty", text: "", id: "8-4" },
-      { type: "empty", text: "", id: "8-5" },
-      { type: "empty", text: "", id: "8-6" },
-    ],
-    [
-      { type: "empty", text: "", id: "9-0" },
-      { type: "empty", text: "", id: "9-1" },
-      { type: "empty", text: "", id: "9-2" },
-      { type: "clue", text: "NANOS ECOND", id: "nano" },
-      { type: "clue", text: "PULLA CAR", id: "pulla" },
-      { type: "letter", text: "T", id: "9-5", placed: true },
-      { type: "empty", text: "", id: "9-6" },
-    ],
-    [
-      { type: "icon", text: "🏃", id: "runner" },
-      { type: "empty", text: "", id: "10-1" },
-      { type: "empty", text: "", id: "10-2" },
-      { type: "empty", text: "", id: "10-3" },
-      { type: "clue", text: "ALIENS", id: "aliens" },
-      { type: "empty", text: "", id: "10-5" },
-      { type: "empty", text: "", id: "10-6" },
-    ],
-    [
-      { type: "clue", text: "RESULT", id: "result" },
-      { type: "letter", text: "E", id: "11-1", placed: true },
-      { type: "letter", text: "N", id: "11-2", placed: true },
-      { type: "empty", text: "", id: "11-3" },
-      { type: "letter", text: "U", id: "11-4", placed: true },
-      { type: "clue", text: "ISLE", id: "isle" },
-      { type: "empty", text: "", id: "11-6" },
-    ],
-    [
-      { type: "empty", text: "", id: "12-0" },
-      { type: "empty", text: "", id: "12-1" },
-      { type: "empty", text: "", id: "12-2" },
-      { type: "empty", text: "", id: "12-3" },
-      { type: "empty", text: "", id: "12-4" },
-      { type: "clue", text: "COAST GUARD", id: "coast" },
-      { type: "empty", text: "", id: "12-6" },
-    ],
-    [
-      { type: "clue", text: "NORTH CAROLINA", id: "carolina" },
-      { type: "letter", text: "B", id: "13-1", placed: true },
-      { type: "empty", text: "", id: "13-2" },
-      { type: "clue", text: "REALITY", id: "reality" },
-      { type: "empty", text: "", id: "13-4" },
-      { type: "empty", text: "", id: "13-5" },
-      { type: "letter", text: "T", id: "13-6", placed: true },
-    ],
-    [
-      { type: "empty", text: "", id: "14-0" },
-      { type: "empty", text: "", id: "14-1" },
-      { type: "empty", text: "", id: "14-2" },
-      { type: "clue", text: "RADIUS", id: "radius" },
-      { type: "empty", text: "", id: "14-4" },
-      { type: "empty", text: "", id: "14-5" },
-      { type: "empty", text: "", id: "14-6" },
-    ],
-    [
-      { type: "clue", text: "VIA", id: "via" },
-      { type: "letter", text: "E", id: "15-1", placed: true },
-      { type: "letter", text: "H", id: "15-2", placed: true },
-      { type: "empty", text: "", id: "15-3" },
-      { type: "letter", text: "U", id: "15-4", placed: true },
-      { type: "empty", text: "", id: "15-5" },
-      { type: "letter", text: "H", id: "15-6", placed: true },
-    ],
-  ],
-}
-
-// Define the correct answers for each position
-const solutionGrid: string[][] = [
-  ["", "", "", "", "", "", ""],
-  ["", "A", "P", "P", "L", "E", "C"],
-  ["", "C", "H", "E", "", "E", ""],
-  ["", "K", "E", "E", "", "R", ""],
-  ["", "N", "", "T", "P", "", ""],
-  ["", "O", "", "", "", "", ""],
-  ["", "W", "", "", "", "", ""],
-  ["", "L", "", "", "", "", ""],
-  ["", "E", "A", "", "", "", ""],
-  ["", "D", "", "", "", "T", ""],
-  ["", "G", "", "", "", "", ""],
-  ["", "E", "N", "T", "U", "", ""],
-  ["", "A", "", "", "", "", ""],
-  ["", "B", "H", "", "", "", "T"],
-  ["", "L", "", "", "", "", ""],
-  ["", "E", "H", "U", "U", "", "H"],
-]
-
-// Define word patterns - only for COMPLETE rows and columns
-const wordPatterns = {
-  completeRows: [
-    { row: 1, word: "ABASE", name: "Row 1 Complete" }, 
-    { row: 11, word: "ENTU", name: "Row 11 Complete" },
-    { row: 15, word: "THUUH", name: "Row 15 Complete" }, 
-  ],
-  // Complete columns that form words when all letters are filled
-  completeColumns: [
-    { col: 1, word: "ACKNOWLEDGEABLE", name: "Column 1 Complete" },
-    { col: 2, word: "THEANHH", name: "Column 2 Complete" }, 
-    { col: 3, word: "FEETHHU", name: "Column 3 Complete" }, 
-  ],
-}
-
-const checkCompletedWords = (
-  gridState: GridCell[][],
-  completedWords: string[],
-  setCompletedWords: any,
-  setScores: any,
-  setGameHistory: any,
-) => {
-  const newlyCompleted: string[] = []
-
-  // Check complete ROWS (like how it currently works)
-  wordPatterns.completeRows.forEach(({ row, word, name }) => {
-    let isComplete = true
-    let currentWord = ""
-    let letterCount = 0
-
-    // Check all positions in this row that should have letters
-    for (let col = 0; col < gridState[row].length; col++) {
-      const expectedLetter = solutionGrid[row][col]
-      if (expectedLetter) {
-        // Only check positions that should have letters
-        const cell = gridState[row][col]
-        if (!cell.text || cell.text.toUpperCase() !== expectedLetter.toUpperCase()) {
-          isComplete = false
-          break
-        }
-        currentWord += cell.text.toUpperCase()
-        letterCount++
-      }
-    }
-
-    const wordId = `complete-row-${row}`
-    if (isComplete && letterCount > 0 && !completedWords.includes(wordId)) {
-      newlyCompleted.push(wordId)
-      setScores((prev: { You: number }) => ({ ...prev, You: prev.You + letterCount }))
-      setGameHistory((prev: any) => [
-        ...prev,
-        `🎉 Complete Row ${row} finished! +${letterCount} bonus points for: ${currentWord}`,
-      ])
-    }
-  })
-
-  // Check complete COLUMNS (same logic as rows)
-  wordPatterns.completeColumns.forEach(({ col, word, name }) => {
-    let isComplete = true
-    let currentWord = ""
-    let letterCount = 0
-
-    // Check all positions in this column that should have letters
-    for (let row = 0; row < gridState.length; row++) {
-      const expectedLetter = solutionGrid[row][col]
-      if (expectedLetter) {
-        // Only check positions that should have letters
-        const cell = gridState[row][col]
-        if (!cell.text || cell.text.toUpperCase() !== expectedLetter.toUpperCase()) {
-          isComplete = false
-          break
-        }
-        currentWord += cell.text.toUpperCase()
-        letterCount++
-      }
-    }
-
-    const wordId = `complete-column-${col}`
-    if (isComplete && letterCount > 0 && !completedWords.includes(wordId)) {
-      newlyCompleted.push(wordId)
-      setScores((prev: { You: number }) => ({ ...prev, You: prev.You + letterCount }))
-      setGameHistory((prev: any) => [
-        ...prev,
-        `🎉 Complete Column ${col} finished! +${letterCount} bonus points for: ${currentWord}`,
-      ])
-    }
-  })
-
-  if (newlyCompleted.length > 0) {
-    setCompletedWords((prev: any) => [...prev, ...newlyCompleted])
-  }
-}
-
-// All possible letters that can appear in the solution
-const allAvailableLetters = ["A", "T", "L", "F", "E", "H", "C", "I", "P", "A", "N", "U", "K", "D"]
-
-const initialLetters = ["L", "H", "A", "O", "E"]
 
 export default function CrosswordPuzzleGame() {
+  const navigation = useNavigation<any>();
+  const makeId = (ch: string, idx: number) => `d-${Date.now().toString(36)}-${idx}-${Math.random().toString(36).slice(2,6)}`;
+
+  const initialDeck = useMemo<DeckItem[]>(
+    () => initialLetters.map((ch, i) => ({ id: makeId(ch, i), char: ch, originalIndex: i })),
+    []
+  );
+
+  const app = getApp();
+const firebaseAuth = getAuth(app);
+const firebaseDb = getDatabase(app);
+
   const [grid, setGrid] = useState<GridCell[][]>(puzzleData.grid)
-  const [letterDeck, setLetterDeck] = useState(initialLetters)
+  const [letterDeck, setLetterDeck] = useState<DeckItem[]>(initialDeck)
   const [selectedLetterIndex, setSelectedLetterIndex] = useState<number | null>(null)
   const [currentPlayer, setCurrentPlayer] = useState<"You" | "Opponent">("You")
-  const [scores, setScores] = useState({ You: 0, Opponent: 7 }) // Match the image scores
+  const [scores, setScores] = useState({ You: 0, Opponent: 0 })
   const [gameHistory, setGameHistory] = useState<string[]>([])
   const [completedWords, setCompletedWords] = useState<string[]>([])
+  const [turnPlacements, setTurnPlacements] = useState<TurnPlacement[]>([])
+  const [reservedVersion, setReservedVersion] = useState(0);
+  const reservedRef = useRef<Record<string, { char: string; originalIndex: number }>>({});
+  const [tileLayerVersion, setTileLayerVersion] = useState(0);
+  const passInProgressRef = useRef(false);
+  const [boardVersion, setBoardVersion] = useState(0);
+  const [showTileLayer, setShowTileLayer] = useState(true);
+  const [tentativePlacements, setTentativePlacements] = useState<TurnPlacement[]>([]);
+const [returningIds, setReturningIds] = useState<string[]>([]);
 
-  const isEmptyCell = (cell: GridCell) => cell.type === "empty" && !cell.text
+  const [swapModalVisible, setSwapModalVisible] = useState(false);
 
-  // Function to get needed letters for remaining empty cells
-  const getNeededLetters = () => {
-    const neededLetters: string[] = []
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [aiInProgress, setAiInProgress] = useState(false);
+const aiScheduledRef = useRef(false); 
 
-    grid.forEach((row, rowIndex) => {
-      row.forEach((cell, colIndex) => {
-        if (isEmptyCell(cell)) {
-          const expectedLetter = solutionGrid[rowIndex][colIndex]
-          if (expectedLetter && !neededLetters.includes(expectedLetter)) {
-            neededLetters.push(expectedLetter)
-          }
-        }
-      })
-    })
+const [levelSolutionGrid, setLevelSolutionGrid] = useState<string[][]>(solutionGrid); // initial imported fallback
+const [levelAllAvailableLetters, setLevelAllAvailableLetters] = useState<string[]>(allAvailableLetters);
+const [levelPuzzleDataState, setLevelPuzzleDataState] = useState<any>(puzzleData);
 
-    return neededLetters
+ const hints = useHints({ grid, solutionGrid: levelSolutionGrid, letterDeck, freeHints: 2, highlightDurationMs: 5000 });
+const hintedSet = useMemo(() => new Set(hints.currentHighlights.map(h => `${h.r}-${h.c}`)), [hints.currentHighlights]);
+
+const [aiOverlayVisible, setAiOverlayVisible] = useState(false);
+const [aiOverlayPayload, setAiOverlayPayload] = useState<any>(null);
+
+const congratsShownRef = useRef(false);
+const justLoadedLevelRef = useRef(false);
+const startTsRef = useRef<number>(Date.now());
+
+const scoreOverlayRef = useRef<ScoreOverlayHandle | null>(null);
+
+const wordsDisplayedRef = useRef<Set<string>>(new Set());
+
+const { state: gameState, dispatch: gameDispatch } = useGame();
+
+const TURN_SECONDS = (gameState?.matchSettings?.turnSeconds as number) ?? 60;
+
+const [lives, setLives] = useState<{ You: number; Opponent: number }>({ You: 3, Opponent: 3 });
+
+const [timerLeft, setTimerLeft] = useState<{ You: number; Opponent: number }>({ You: TURN_SECONDS, Opponent: TURN_SECONDS });
+
+
+const serverCurrentUid = (gameState as any)?.currentPlayerUid ?? null;
+const localUidForTurn = firebaseAuth.currentUser?.uid ?? gameState?.playerId ?? null;
+
+const effectiveCurrentPlayer = gameState?.mode === 'pvp'
+  ? (serverCurrentUid ? (serverCurrentUid === localUidForTurn ? "You" : "Opponent") : (gameState.currentPlayer ?? currentPlayer))
+  : currentPlayer;
+
+const isMyTurn = effectiveCurrentPlayer === "You";
+
+const showLivesEnabled = !!(
+  gameState &&
+  gameState.mode === 'pvp' &&
+  gameState.matchId &&
+  gameState.matchSettings &&
+  gameState.matchSettings.timed === true &&
+  gameState.matchSettings.quickMatch === true
+);
+
+const uiLocked = !isMyTurn || isSubmitting || aiInProgress || (showLivesEnabled && ((lives?.You ?? 0) <= 0));
+
+
+const seenTurnTsRef = useRef<Set<number | string>>(new Set());
+
+const [preGameVisible, setPreGameVisible] = useState(false);
+const prevMatchIdRef = useRef<string | null>(null);
+const preGameFiredRef = useRef<Record<string, boolean>>({});
+
+const [outOfLivesVisible, setOutOfLivesVisible] = useState(false);
+const [outOfLivesSide, setOutOfLivesSide] = useState<"You" | "Opponent" | null>(null);
+
+const tentativeMap = useMemo(() => {
+  const m = new Map<string, TurnPlacement>();
+  tentativePlacements.forEach(tp => {
+    m.set(`${tp.row}-${tp.col}`, tp);
+  });
+  return m;
+}, [tentativePlacements]);
+
+
+const mkIdLocal = (ch: string) => `r-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,6)}-${ch}`;
+
+const rows = grid.length;
+const cols = grid[0]?.length ?? 0;
+
+const [scoreBarLayout, setScoreBarLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+const [opponentLayout, setOpponentLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+const [opponentLocalLayout, setOpponentLocalLayout] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+
+
+const [boardLayoutOuter, setBoardLayoutOuter] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+const [boardLayoutInner, setBoardLayoutInner] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
+
+const myUid = firebaseAuth.currentUser?.uid ?? gameState?.playerId ?? null;
+const allocations = (gameState as any)?.playerAllocations ?? null;
+const myAllocCount = allocations && myUid ? (allocations[myUid]?.length ?? 0) : null;
+const oppUid = allocations && myUid ? Object.keys(allocations).find(k => k !== myUid) : null;
+const oppAllocCount = allocations && oppUid ? (allocations[oppUid]?.length ?? 0) : null;
+  type DeckDerivedTile = { id: string; char: string; originalIndex: number };
+
+  const derivedFromDeck = useMemo<DeckDerivedTile[]>(() => {
+    return letterDeck.map((it, idx) => ({ id: it.id, char: it.char, originalIndex: idx }));
+  }, [letterDeck]);
+
+  const draggableTiles = useMemo(() => {
+  const mapByIndex: Record<number, DeckDerivedTile> = {};
+  derivedFromDeck.forEach((t) => {
+    mapByIndex[t.originalIndex] = t;
+  });
+
+  Object.entries(reservedRef.current).forEach(([id, info]) => {
+    mapByIndex[info.originalIndex] = {
+      id,
+      char: info.char,
+      originalIndex: info.originalIndex,
+    };
+  });
+
+  const indexes = Object.keys(mapByIndex).map((s) => parseInt(s, 10)).sort((a, b) => a - b);
+  const arranged = indexes.map((i) => mapByIndex[i]).filter(Boolean);
+
+  const seen = new Set<string>();
+  const deduped: DeckDerivedTile[] = [];
+  for (const item of arranged) {
+    if (!item) continue;
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    deduped.push(item);
   }
 
-  // Function to refill letter deck when empty
-  const refillLetterDeck = () => {
-    if (letterDeck.length === 0) {
-      const neededLetters = getNeededLetters()
-      if (neededLetters.length > 0) {
-        // Give 5 random letters from needed letters (with possible duplicates)
-        const newDeck: string[] = []
-        for (let i = 0; i < 5; i++) {
-          const randomLetter = neededLetters[Math.floor(Math.random() * neededLetters.length)]
-          newDeck.push(randomLetter)
-        }
-        setLetterDeck(newDeck)
-        setGameHistory((prev) => [...prev, `🔄 New letters provided: ${newDeck.join(", ")}`])
-      } else {
-        // If no more letters needed, give random letters from all available
-        const newDeck: string[] = []
-        for (let i = 0; i < 5; i++) {
-          const randomLetter = allAvailableLetters[Math.floor(Math.random() * allAvailableLetters.length)]
-          newDeck.push(randomLetter)
-        }
-        setLetterDeck(newDeck)
-        setGameHistory((prev) => [...prev, `🔄 Random letters provided: ${newDeck.join(", ")}`])
+  return deduped;
+}, [derivedFromDeck, reservedVersion]);
+
+
+
+
+  const logicProps = {
+    grid, setGrid,
+    letterDeck, setLetterDeck,
+    selectedLetterIndex, setSelectedLetterIndex,
+    currentPlayer, setCurrentPlayer,
+    scores, setScores,
+    gameHistory, setGameHistory,
+    completedWords, setCompletedWords,
+    solutionGrid : levelSolutionGrid,
+    puzzleData : levelPuzzleDataState,
+    turnPlacements,
+    setTurnPlacements,
+  }
+
+  const logicWithDeck = { ...logicProps, letterDeck, setLetterDeck }; // used by swap functions
+
+  
+
+const decodeCompleteId = (id: string) => {
+  try {
+    if (!id || typeof id !== "string") return null;
+    if (id.startsWith("complete-row-")) {
+      const parts = id.split("-");
+      const row = parseInt(parts[2], 10);
+      const startCol = parseInt(parts[3], 10);
+      const endCol = parts[4] === "end" ? cols - 1 : parseInt(parts[4], 10);
+      const cells: { r: number; c: number }[] = [];
+      for (let c = startCol; c <= endCol; c++) cells.push({ r: row, c });
+      return { cells, points: cells.length };
+    }
+    if (id.startsWith("complete-col-")) {
+      const parts = id.split("-");
+      const col = parseInt(parts[2], 10);
+      const startRow = parseInt(parts[3], 10);
+      const endRow = parts[4] === "end" ? rows - 1 : parseInt(parts[4], 10);
+      const cells: { r: number; c: number }[] = [];
+      for (let r = startRow; r <= endRow; r++) cells.push({ r, c: col });
+      return { cells, points: cells.length };
+    }
+  } catch (err) {
+  }
+  return null;
+};
+
+const isGridComplete = (g: GridCell[][]) => {
+  if (justLoadedLevelRef.current) return false;
+  if (!Array.isArray(g) || !Array.isArray(levelSolutionGrid)) return false;
+ for (let r = 0; r < levelSolutionGrid.length; r++) {
+   for (let c = 0; c < (levelSolutionGrid[r] ?? []).length; c++) {
+     const expected = (levelSolutionGrid[r]?.[c] ?? "").toString();
+      if (!expected) continue; 
+      const cell = g[r]?.[c];
+      if (!cell || !cell.text) return false;
+      if ((cell.text ?? "").toString().toUpperCase() !== expected.toUpperCase()) return false;
+    }
+  }
+  return true;
+};
+
+const pendingSubmitRef = useRef<{
+  existingDeck: DeckItem[] | null;
+  returns: { id?: string; char: string }[] | null;
+} | null>(null);
+
+
+const handleSubmit = async () => {
+  if (passInProgressRef.current || isSubmitting) return;
+  passInProgressRef.current = true;
+  setIsSubmitting(true);
+
+  const placements = [...tentativePlacements];
+  if (placements.length === 0) {
+    passInProgressRef.current = false;
+    setIsSubmitting(false);
+    return;
+  }
+
+  if (gameState?.mode === 'pvp' && gameState?.matchId) {
+    try {
+      const res = await handleSubmitMultiplayer(gameState.matchId, placements, gameDispatch, gameState.playerId);
+      if (!res || res.committed === false) {
+        setTentativePlacements([]);
+        reservedRef.current = {};
+        setReservedVersion(v => v + 1);
+        setTileLayerVersion(v => v + 1);
+
+        passInProgressRef.current = false;
+        setIsSubmitting(false);
+        return;
       }
+
+      setTentativePlacements([]);
+      reservedRef.current = {};
+      setReservedVersion(v => v + 1);
+      setTileLayerVersion(v => v + 1);
+      passInProgressRef.current = false;
+      setIsSubmitting(false);
+      return;
+    } catch (err) {
+      console.warn('handleSubmitMultiplayer failed', err);
+      setTentativePlacements([]);
+      reservedRef.current = {};
+      setReservedVersion(v => v + 1);
+      setTileLayerVersion(v => v + 1);
+      passInProgressRef.current = false;
+      setIsSubmitting(false);
+      notify({ type: 'error', message: 'Submit failed — try again.' });
+      return;
     }
   }
 
-  const placeLetter = (rowIndex: number, colIndex: number) => {
-    if (currentPlayer === "Opponent") return
 
-    const cell = grid[rowIndex][colIndex]
+  const nextGrid = grid.map((row) => row.map(cell => ({ ...cell })));
 
-    if (!isEmptyCell(cell)) {
-      Alert.alert("Invalid Move", "You can only place letters on empty cells.")
-      return
-    }
+  const returns: { char: string }[] = [];
+  let scoreDelta = 0;
 
-    if (selectedLetterIndex === null) {
-      Alert.alert("Select Letter", "Please select a letter from your deck first.")
-      return
-    }
+  placements.forEach((p) => {
+    const expected = levelSolutionGrid[p.row]?.[p.col] ?? "";
+    const placedChar = p.char ?? "";
+    const isCorrect = expected && placedChar.toUpperCase() === expected.toUpperCase();
 
-    const placedLetter = letterDeck[selectedLetterIndex]
-    const correctLetter = solutionGrid[rowIndex][colIndex]
-
-    // Check if the placed letter matches the correct answer
-    let isCorrect = false
-    if (correctLetter && placedLetter.toUpperCase() === correctLetter.toUpperCase()) {
-      isCorrect = true
-      setScores((prev) => ({ ...prev, You: prev.You + 1 }))
-      setGameHistory((prev) => [
-        ...prev,
-        `✅ Correct! +1 point for placing ${placedLetter} at (${rowIndex},${colIndex})`,
-      ])
-
-      // Only place the letter if it's correct
-      const newGrid = grid.map((row, rIdx) =>
-        row.map((cell, cIdx) => {
-          if (rIdx === rowIndex && cIdx === colIndex) {
-            return {
-              ...cell,
-              text: placedLetter,
-              type: "letter" as const,
-              placed: true,
-              placedBy: currentPlayer,
-            } as GridCell
-          }
-          return cell
-        }),
-      )
-      setGrid(newGrid)
-
-      // Check for completed words after placing the letter
-      setTimeout(() => {
-        checkCompletedWords(newGrid, completedWords, setCompletedWords, setScores, setGameHistory)
-      }, 100)
+    if (isCorrect) {
+      scoreDelta += 1;
+      nextGrid[p.row][p.col] = {
+        ...nextGrid[p.row][p.col],
+        text: placedChar,
+        type: "letter",
+        placed: true,
+        placedBy: "You",
+      };
     } else {
-      setScores((prev) => ({ ...prev, You: Math.max(0, prev.You - 1) }))
-      setGameHistory((prev) => [
-        ...prev,
-        `❌ Wrong! -1 point. Expected: ${correctLetter || "None"}, Got: ${placedLetter}`,
-      ])
+      nextGrid[p.row][p.col] = {
+        ...nextGrid[p.row][p.col],
+        text: "",
+        type: "empty",
+        placed: false,
+      };
+      returns.push({ char: placedChar });
     }
+  });
 
-    // Remove the letter from deck regardless of correct/incorrect
-    const newDeck = [...letterDeck]
-    newDeck.splice(selectedLetterIndex, 1)
-    setLetterDeck(newDeck)
-
-    setSelectedLetterIndex(null)
-
-    // Check if deck is empty and refill if needed
-    setTimeout(() => {
-      refillLetterDeck()
-    }, 500)
-  }
-
-  const passTurn = () => {
-    setGameHistory((prev) => [...prev, `${currentPlayer} passed their turn`])
-
-    if (currentPlayer === "You") {
-      setTimeout(() => aiTurn(), 1000)
-    }
-
-    setCurrentPlayer(currentPlayer === "You" ? "Opponent" : "You")
-
-    // Refill deck when passing turn if empty
-    if (letterDeck.length === 0) {
-      refillLetterDeck()
-    }
-  }
-
-  const aiTurn = () => {
-    // Simple AI that places a random letter
-    const emptyCells: [number, number][] = []
-
-    grid.forEach((row, rowIndex) => {
-      row.forEach((cell, colIndex) => {
-        if (isEmptyCell(cell)) {
-          emptyCells.push([rowIndex, colIndex])
-        }
-      })
+  const TARGET = 5;
+  const existingDeck = Array.isArray(letterDeck) ? [...letterDeck] : [];
+  const returnsWithIds = placements
+    .filter((p) => {
+      const expected = levelSolutionGrid[p.row]?.[p.col] ?? "";
+      return !(expected && (p.char ?? "").toUpperCase() === expected.toUpperCase());
     })
+    .map((p) => ({
+      id: p.tileId ?? mkIdLocal((p.char ?? "").toString()),
+      char: (p.char ?? "").toString().toUpperCase(),
+    }));
 
-    if (emptyCells.length > 0) {
-      const [row, col] = emptyCells[Math.floor(Math.random() * emptyCells.length)]
-      const aiLetters = ["T", "H", "E", "A", "R"]
-      const letter = aiLetters[Math.floor(Math.random() * aiLetters.length)]
+const builtDeck = buildSmartDeck(existingDeck, returnsWithIds, nextGrid, levelSolutionGrid, levelAllAvailableLetters, TARGET);
 
-      const correctLetter = solutionGrid[row][col]
-      let isCorrect = false
-      if (correctLetter && letter.toUpperCase() === correctLetter.toUpperCase()) {
-        isCorrect = true
-        setScores((prev) => ({ ...prev, Opponent: prev.Opponent + 1 }))
-        setGameHistory((prev) => [...prev, `AI got +1 point for placing ${letter} correctly`])
+  const displayGrid = nextGrid.map((row) => row.map((cell) => ({ ...cell })));
+  placements.forEach((p) => {
+    const expected = levelSolutionGrid[p.row]?.[p.col] ?? "";
+    const isCorrect = expected && (p.char ?? "").toUpperCase() === expected.toUpperCase();
+    displayGrid[p.row][p.col] = {
+      ...displayGrid[p.row][p.col],
+      recentlyScored: isCorrect ? "correct" : "wrong",
+    };
+  });
+
+  setGrid(displayGrid);
+  hints.resetHighlights();  
+
+  const newCompletedIds: string[] = detectCompletedWords(displayGrid, levelSolutionGrid);
+
+  const justAdded = newCompletedIds.filter(id => !completedWords.includes(id));
+
+  const totalBonus = justAdded.reduce((acc, id) => {
+    const decoded = decodeCompleteId(id);
+    return acc + (decoded ? decoded.points : 0);
+  }, 0);
+
+  setTentativePlacements([]);
+  
+
+  const letterPromises: Promise<void>[] = [];
+  for (const p of placements) {
+    const expected = levelSolutionGrid[p.row]?.[p.col] ?? "";
+    const isCorrect = expected && (p.char ?? "").toUpperCase() === expected.toUpperCase();
+    const pts = isCorrect ? 1 : -1;
+    const pr = scoreOverlayRef.current?.showLetterPoints({
+      row: p.row,
+      col: p.col,
+      points: pts,
+      owner: "You",
+      duration: 700,
+      position: "top-right",
+    }) ?? Promise.resolve();
+    letterPromises.push(pr);
+  }
+
+  try {
+    await Promise.all(letterPromises);
+  } catch (err) {
+    console.warn("letter overlay promises failed:", err);
+  }
+
+  const letterDelta = scoreDelta;
+  const wordBonus = totalBonus;
+
+  const totalDeltaForYou = (letterDelta || 0) + (wordBonus || 0);
+  if (totalDeltaForYou !== 0) {
+    setScores(prev => ({ ...prev, You: (prev.You ?? 0) + totalDeltaForYou }));
+  }
+
+for (const id of justAdded) {
+if (wordsDisplayedRef.current.has(id)) continue;
+const decoded = decodeCompleteId(id);
+if (!decoded) continue;
+
+const decodedSet = new Set<string>();
+decoded.cells.forEach(p => decodedSet.add(`${p.r}-${p.c}`));
+
+const highlightedGrid = displayGrid.map(row => row.map(cell => ({ ...cell })));
+
+decodedSet.forEach(key => {
+  const [rStr, cStr] = key.split("-");
+  const r = parseInt(rStr, 10);
+  const c = parseInt(cStr, 10);
+  if (!Number.isNaN(r) && !Number.isNaN(c) && highlightedGrid[r] && highlightedGrid[r][c]) {
+    const cell = highlightedGrid[r][c];
+    const expected = (levelSolutionGrid[r]?.[c] ?? "").toString();
+    if (!cell.text && expected) {
+      cell.text = expected;
+      cell.type = "letter";
+      cell.placed = true;
+      cell.placedBy = "You";
+    }
+    cell.wordHighlight = true;
+    if (cell.recentlyScored) delete (cell as any).recentlyScored;
+    if (cell.tentative) { delete (cell as any).tentative; delete (cell as any).tentativeBy; delete (cell as any).tentativeTileId; }
+  }
+});
+
+setGrid(highlightedGrid);
+setBoardVersion(v => v + 1);
+await new Promise<void>((res) => setTimeout(() => res(), 40));
+try {
+  await (scoreOverlayRef.current?.showWordPoints({
+    cells: decoded.cells.map(p => ({ r: p.r, c: p.c })),
+    points: decoded.points,
+    owner: "You",
+    duration: 900,
+    position: "center",
+  }) ?? Promise.resolve());
+} catch (err) { console.warn("word overlay failed:", err); }
+await new Promise<void>((res) => setTimeout(() => res(), 240));
+setGrid(prev => prev.map(row => row.map(cell => {
+  const clone = { ...cell };
+  if (clone.wordHighlight) delete clone.wordHighlight;
+  return clone;
+})));
+setBoardVersion(v => v + 1);
+wordsDisplayedRef.current.add(id);
+
+}
+
+
+  setTimeout(() => {
+    setGrid(prev => prev.map((row) => row.map((cell) => {
+      const copy = { ...cell } as any;
+      if (copy.recentlyScored) delete copy.recentlyScored;
+      return copy;
+    })));
+  }, 120);
+
+  setShowTileLayer(false);
+  reservedRef.current = {};
+  setReservedVersion((v) => v + 1);
+
+  const deckSnapshot = Array.isArray(letterDeck) ? letterDeck.map(d => ({ ...d })) : [];
+ 
+  pendingSubmitRef.current = {
+    existingDeck: deckSnapshot,
+    returns: returnsWithIds,
+  };
+  setTileLayerVersion(v => v + 1);
+
+  setTimeout(() => {
+    if (gameState?.mode === 'local') {
+      if (!aiScheduledRef.current) {
+        aiScheduledRef.current = true;
+        setCurrentPlayer("Opponent");
+
+        const cleanGridForAI = nextGrid.map(row => row.map(cell => {
+          const c = { ...cell } as any;
+          if (c.recentlyScored) delete c.recentlyScored;
+          return c;
+        }));
+
+        startAiSequence({ ...logicProps, grid: cleanGridForAI, letterDeck: deckSnapshot }, 5);
       }
+    } else {
+      passInProgressRef.current = false;
+      setIsSubmitting(false);
+    }
+  }, 30);
 
-      const newGrid = grid.map((gridRow, rIdx) =>
-        gridRow.map((cell, cIdx) => {
-          if (rIdx === row && cIdx === col) {
-            return {
-              ...cell,
-              text: letter,
-              type: "letter" as const,
-              placed: true,
-              placedBy: "Opponent",
-            } as GridCell
+};
+
+
+const startAiSequence = (propsSnapshot: any, moves = 1) => {
+  if (gameState?.mode !== 'local') return;
+  try {
+    const pending = pendingSubmitRef.current ?? null;
+    const forbiddenCounts: Record<string, number> = {};
+    if (pending && Array.isArray(pending.existingDeck)) {
+      for (const d of pending.existingDeck) {
+        const ch = ((d?.char ?? "") + "").toString().toUpperCase();
+        if (!ch) continue;
+        forbiddenCounts[ch] = (forbiddenCounts[ch] || 0) + 1;
+      }
+    }
+
+    const aiTarget = Math.max(1, Math.min(5, moves || 5));
+    let aiDeck: any[] = [];
+    try {
+      const cleanGrid = propsSnapshot.grid ?? grid;
+aiDeck = buildSmartDeck([], [], cleanGrid, levelSolutionGrid, levelAllAvailableLetters, aiTarget) || [];
+    } catch (e) {
+      console.warn("[startAiSequence] buildSmartDeck failed:", e);
+      aiDeck = Array.isArray(propsSnapshot.letterDeck) ? [...propsSnapshot.letterDeck].slice(0, aiTarget) : [];
+    }
+
+    try {
+          const cleanGrid: GridCell[][] = Array.isArray(propsSnapshot?.grid) ? propsSnapshot.grid : Array.isArray(grid) ? grid : [];
+      if (forbiddenCounts && Object.keys(forbiddenCounts).length > 0) {
+        aiDeck = aiDeck.filter(d => {
+          const ch = ((d?.char ?? '') + '').toString().toUpperCase();
+          return !(forbiddenCounts[ch] && forbiddenCounts[ch] > 0);
+        });
+
+        if (aiDeck.length < aiTarget) {
+          const candidate = buildSmartDeck([], [], cleanGrid, levelSolutionGrid, levelAllAvailableLetters, Math.max(aiTarget * 3, 10)) || [];
+          for (const cand of candidate) {
+            if (aiDeck.length >= aiTarget) break;
+            const ch = ((cand?.char ?? '') + '').toString().toUpperCase();
+            if (!(forbiddenCounts[ch] && forbiddenCounts[ch] > 0)) {
+              aiDeck.push(cand);
+            }
           }
-          return cell
-        }),
-      )
-
-      setGrid(newGrid)
+          aiDeck = aiDeck.slice(0, aiTarget);
+        }
+      }
+    } catch (e) {
+      console.warn("[startAiSequence] aiDeck sanitation failed:", e);
     }
 
-    setCurrentPlayer("You")
+    if ((!Array.isArray(aiDeck) || aiDeck.length === 0) && Array.isArray(propsSnapshot.letterDeck)) {
+      aiDeck = propsSnapshot.letterDeck.filter((d: { char: any; }) => {
+        const ch = ((d?.char ?? '') + '').toString().toUpperCase();
+        return !(forbiddenCounts[ch] && forbiddenCounts[ch] > 0);
+      }).slice(0, aiTarget);
+    }
+
+const result = computeAiMove({
+  ...propsSnapshot,
+  letterDeck: aiDeck,
+  solutionGrid: levelSolutionGrid,                   
+  allAvailableLetters: levelAllAvailableLetters,     
+}, moves, Object.keys(forbiddenCounts).length > 0 ? { ...forbiddenCounts } : undefined);
+
+
+    setAiOverlayPayload(result);
+
+    setAiInProgress(true);
+    setIsSubmitting(false);
+
+    setAiOverlayVisible(true);
+  } catch (err) {
+    console.warn("startAiSequence failed:", err);
+    try { aiTurn(propsSnapshot as any, moves); } catch (_) {}
+  }
+};
+
+
+const boundSubmitTurn = () => {
+  if (passInProgressRef.current) return;
+  passInProgressRef.current = true;
+
+ 
+  setTimeout(() => {
+    const deckSnapshot = Array.isArray(letterDeck) ? letterDeck.map(d => ({ ...d })) : [];
+
+    submitTurn({ ...logicProps, letterDeck: deckSnapshot }, (existingDeckFromSubmit: DeckItem[] | null, returnsFromSubmit: any[] | null, nextGrid: GridCell[][]) => {
+      setGrid(nextGrid);
+      setBoardVersion((v) => v + 1);
+      setShowTileLayer(false);
+      reservedRef.current = {};
+      setReservedVersion((v) => v + 1);
+
+      pendingSubmitRef.current = {
+        existingDeck: Array.isArray(existingDeckFromSubmit) ? existingDeckFromSubmit.map(d => ({ ...d })) : deckSnapshot,
+        returns: Array.isArray(returnsFromSubmit) ? returnsFromSubmit.map(r => ({ ...r })) : [],
+      };
+      setTileLayerVersion((v) => v + 1);
+
+      if (gameState?.mode === 'local') {
+        if (!aiScheduledRef.current) {
+          aiScheduledRef.current = true;
+          setCurrentPlayer("Opponent");
+
+          const cleanGridForAI = nextGrid.map(row => row.map(cell => {
+            const c = { ...cell } as any;
+            if (c.recentlyScored) delete c.recentlyScored;
+            return c;
+          }));
+
+          startAiSequence({ ...logicProps, grid: cleanGridForAI, letterDeck: deckSnapshot }, 5);
+        }
+      } else {
+        passInProgressRef.current = false;
+        setIsSubmitting(false);
+      }
+    });
+
+  }, 30);
+};
+
+const boundPassTurn = () => {
+  passInProgressRef.current = true;
+
+  passTurn(logicProps, (newDeck, nextGrid) => {
+    setGrid(nextGrid);
+    setBoardVersion((v) => v + 1);
+    setShowTileLayer(false);
+
+    reservedRef.current = {};
+    setReservedVersion((v) => v + 1);
+
+    setTimeout(() => {
+      setLetterDeck(newDeck);
+      setTileLayerVersion((v) => v + 1);
+      setShowTileLayer(true);
+      passInProgressRef.current = false;
+
+      if (gameState?.mode === 'local') {
+      if (!aiScheduledRef.current) {
+        aiScheduledRef.current = true;
+        setCurrentPlayer("Opponent");
+
+        startAiSequence({ ...logicProps, grid: nextGrid, letterDeck: newDeck }, 3);
+      }
+    }}, 50);
+  });
+};
+
+const boundRefillLetterDeck = () => {
+  cancelTentativePlacements({ ...logicProps, targetDeckSize: 5 });
+}
+  const boundResetGame = () => resetGame(logicProps)
+  const boundPlaceLetterAt = (r:number,c:number, tileIndex:number) => placeLetterAt(r,c,tileIndex, logicProps)
+  const boundPlaceLetter = (rowIndex: number, colIndex: number) => placeLetter(rowIndex, colIndex, logicProps)
+
+  const [boardLayout, setBoardLayout] = useState({ x: 0, y: 0, width: 0, height: 0 })
+
+  const isCellOccupied = (r: number, c: number) => {
+  const cell = grid[r]?.[c];
+  if (!cell) return true;
+
+  if (cell.type !== "empty") return true;
+
+  if (cell.text) return true;
+  return false;
+};
+
+  const findDeckIndexForTileId = (tileId: string) => {
+    return letterDeck.findIndex(it => it.id === tileId);
+  };
+
+const handleTilePick = (tileId: string) => {
+  if (passInProgressRef.current || aiInProgress || isSubmitting || effectiveCurrentPlayer !== "You") {
+    return;
   }
 
-  const resetGame = () => {
-    setGrid(puzzleData.grid)
-    setLetterDeck(initialLetters)
-    setSelectedLetterIndex(null)
-    setCurrentPlayer("You")
-    setScores({ You: 0, Opponent: 0 })
-    setGameHistory([])
-    setCompletedWords([])
+  const deckIdx = findDeckIndexForTileId(tileId);
+  if (deckIdx === -1) return;
+  const item = letterDeck[deckIdx];
+
+  reservedRef.current[tileId] = { char: item.char, originalIndex: deckIdx };
+  setReservedVersion(v => v + 1);
+};
+
+
+
+
+ const handleTileDrop = (tileId: string, r: number | null, c: number | null) => {
+  // quick guards
+  if (passInProgressRef.current || aiInProgress || isSubmitting || effectiveCurrentPlayer !== "You") {
+    return;
   }
 
-  const getCellStyle = (cell: GridCell) => {
-    const baseStyle = [styles.cell]
+  if (r == null || c == null) {
+    return;
+  }
 
-    switch (cell.type) {
-      case "clue":
-        return [...baseStyle, styles.clueCell]
-      case "letter":
-        return [...baseStyle, styles.letterCell]
-      case "empty":
-        return [...baseStyle, styles.emptyCell]
-      case "special":
-        return [...baseStyle, styles.specialCell]
-      case "icon":
-        return [...baseStyle, styles.iconCell]
-      default:
-        return [...baseStyle, styles.emptyCell]
+  const tileInDeck = letterDeck.find(it => it.id === tileId);
+  if (!tileInDeck) return;
+
+  const targetCell = grid[r]?.[c];
+  if (!targetCell) return;
+  if (targetCell.type !== "empty" || targetCell.text) return;
+  const newTentativePlacement: TurnPlacement = {
+    tileId: tileInDeck.id,
+    row: r,
+    col: c,
+    char: tileInDeck.char,
+    originalIndex: typeof tileInDeck.originalIndex === "number" ? tileInDeck.originalIndex : -1,
+  };
+
+  unstable_batchedUpdates(() => {
+    setGrid(prevGrid => {
+      const next = prevGrid.map((rowArr, ridx) =>
+        rowArr.map((cellItem, cidx) => {
+          if (ridx === r && cidx === c) {
+            return {
+              ...cellItem,
+              text: tileInDeck.char,
+              type: "letter",
+              tentative: true,
+              tentativeBy: "You",
+              tentativeTileId: tileInDeck.id,
+            } as GridCell;
+          }
+          return cellItem;
+        })
+      );
+      return next;
+    });
+
+    setTentativePlacements(prev => {
+      const filtered = prev.filter(p => !(p.row === r && p.col === c));
+      return [...filtered, newTentativePlacement];
+    });
+
+    setLetterDeck(prev => {
+      const idx = prev.findIndex(it => it.id === tileInDeck.id);
+      if (idx === -1) return prev;
+      return [...prev.slice(0, idx), ...prev.slice(idx + 1)];
+    });
+
+    if (reservedRef.current && reservedRef.current[tileInDeck.id]) {
+      delete reservedRef.current[tileInDeck.id];
+    }
+    setReservedVersion(v => v + 1);
+    setTileLayerVersion(v => v + 1);
+  });
+
+};
+
+
+const PALE_BOARD = ['#F6F2FF', '#E8FAFF', '#F3F6FF']; 
+const PALE_CELL_PINK = ['#FFE9F8', '#F8E7FF', '#E9F2FF']; 
+const PALE_CELL_BLUE = ['#E6F8FF', '#DCEBFF', '#F0E8FF'];
+const PALE_CELL_YELLOW = ['#FFF4D6', '#FFDCC0', '#FFEFE8']; 
+const PALE_CELL_WHITE = ['#FFFFFF', '#FBFDFF']; 
+
+
+const getGradientColors = (cell: GridCell, isTentative = false) => {
+  if (cell.type === 'clue') return ['#E6F7FF', '#DFF3FF'];
+  if (cell.type === 'icon') return ['#FFFDF7', '#FFF8EE'];
+  if (cell.type === 'special') return isTentative
+    ? ['#FFEFCF', '#FFE1A8']
+    : PALE_CELL_YELLOW;
+  if (cell.type === 'letter') return isTentative
+    ? ['#FDE9F9', '#ECEBFF'] 
+    : PALE_CELL_PINK;
+  return PALE_CELL_WHITE;
+};
+
+const handleTimerTick = (side: "You" | "Opponent") => (secs: number) => {
+  setTimerLeft(prev => ({ ...prev, [side]: secs }));
+};
+
+
+const handleTimerExpire = async (side: "You" | "Opponent") => {
+  if (!showLivesEnabled) {
+    console.warn('[handleTimerExpire] ignored because showLivesEnabled=false');
+    return;
+  }
+  if (passInProgressRef.current) {
+    return;
+  }
+  passInProgressRef.current = true;
+
+  let droppedToZero = false;
+  setLives(prev => {
+    const newLives = Math.max(0, (prev as any)[side] - 1);
+    const next = { ...prev, [side]: newLives };
+    if (newLives <= 0) droppedToZero = true;
+    return next;
+  });
+
+  try {
+    cancelTentativePlacements({ ...logicProps, targetDeckSize: 5 });
+    setTentativePlacements([]);
+    reservedRef.current = {};
+    setReservedVersion(v => v + 1);
+    setGrid(prev => prev.map(row => row.map(cell => {
+      const c = { ...cell } as any;
+      if (c.tentative) {
+        delete c.tentative; delete c.tentativeBy; delete c.tentativeTileId;
+        c.text = '';
+        c.type = 'empty';
+      }
+      return c;
+    })));
+    setTileLayerVersion(v => v + 1);
+    setShowTileLayer(false);
+    setTimeout(() => setShowTileLayer(true), 40);
+  } catch (err) {
+    console.warn('handleTimerExpire cleanup failed', err);
+  }
+
+  if (droppedToZero) {
+    if (gameState?.mode === 'pvp' && gameState?.matchId) {
+      try {
+        const myUid = firebaseAuth.currentUser?.uid ?? gameState.playerId ?? null;
+        if (!myUid) {
+          finishMatch(side);
+        } else {
+          const res = await handleExpireMultiplayer(gameState.matchId, myUid);
+          if (res && res.committed) {
+            if (res.winnerUid) {
+              const iAmLoser = (res.winnerUid !== myUid); 
+              if (iAmLoser) {
+                finishMatch(side);
+              } else {
+                finishMatch(side);
+              }
+            }
+          } else {
+            if (gameState?.mode === 'pvp') {
+              gameDispatch({ type: 'SET_CURRENT_PLAYER', player: side === "You" ? "Opponent" : "You" });
+            } else {
+              boundPassTurn();
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('handleExpireMultiplayer call failed', err);
+        if (gameState?.mode === 'pvp') {
+          gameDispatch({ type: 'SET_CURRENT_PLAYER', player: side === "You" ? "Opponent" : "You" });
+        } else {
+          boundPassTurn();
+        }
+      } finally {
+        setTimeout(() => { passInProgressRef.current = false; }, 350);
+      }
+    } else {
+      finishMatch(side);
+      setTimeout(() => { passInProgressRef.current = false; }, 350);
+    }
+    return;
+  }
+
+  try {
+    if (gameState?.mode === 'pvp' && gameState?.matchId) {
+      const { handlePassMultiplayer } = await import('../utils/multiplayerSubmit');
+      try {
+        const res = await handlePassMultiplayer(gameState.matchId, gameDispatch, gameState.playerId);
+        if (!res || res.committed === false) {
+          console.warn('handlePassMultiplayer: not committed or aborted, server snapshot applied');
+        }
+      } catch (err) {
+        console.warn('handlePassMultiplayer call failed', err);
+        gameDispatch({ type: 'SET_CURRENT_PLAYER', player: side === "You" ? "Opponent" : "You" });
+      }
+    } else {
+      boundPassTurn();
+    }
+  } catch (err) {
+    console.warn('boundPassTurn failed on timer expire', err);
+    if (gameState?.mode === 'pvp' && gameState?.matchId) {
+      gameDispatch({ type: 'SET_CURRENT_PLAYER', player: side === "You" ? "Opponent" : "You" });
+    } else {
+      setCurrentPlayer(side === "You" ? "Opponent" : "You");
     }
   }
+
+  const secs = (gameState?.matchSettings?.turnSeconds as number) ?? TURN_SECONDS;
+  setTimerLeft(prev => ({ ...prev, [side]: secs }));
+  setTimeout(() => { passInProgressRef.current = false; }, 350);
+};
+
+
+const finishMatch = async (loserSide: "You" | "Opponent") => {
+  passInProgressRef.current = true;
+  aiScheduledRef.current = false;
+  setIsSubmitting(false);
+  setAiInProgress(false);
+
+  try {
+    cancelTentativePlacements({ ...logicProps, targetDeckSize: 5 });
+  } catch (err) {  }
+
+  setTimerLeft({ You: 0, Opponent: 0 });
+
+  const loserUid = loserSide === "You" ? myUid : oppUid;
+  const winnerUid = loserUid === myUid ? oppUid : myUid;
+
+  const iAmLoser = !!(loserUid && myUid && loserUid === myUid);
+
+  if (gameState?.mode === 'pvp' && gameState?.matchId) {
+    try {
+      console.log('[finishMatch] attempting server end-match', { matchId: gameState.matchId, loserSide, loserUid, winnerUid });
+      const { handleEndMatchMultiplayer } = await import('../utils/multiplayerSubmit');
+      if (typeof handleEndMatchMultiplayer === 'function') {
+        const res = await handleEndMatchMultiplayer(gameState.matchId, { winnerUid: winnerUid ?? undefined, finalScores: { } });
+        console.log('[finishMatch] handleEndMatchMultiplayer result:', res);
+
+        if (res && res.committed) {
+          passInProgressRef.current = false;
+          return;
+        }
+
+        console.warn('[finishMatch] server end-match did not commit, falling back to local handling', res);
+      }
+    } catch (err) {
+      console.warn('finishMatch: end-match multiplayer call failed', err);
+    }
+  }
+
+  if (iAmLoser) {
+    setOutOfLivesSide(loserSide);
+    setOutOfLivesVisible(true);
+  } else {
+    try {
+      navigation.replace('Congratulations', {
+        winner: winnerUid === myUid ? 'You' : 'Opponent',
+        score: winnerUid === myUid ? scores.You : scores.Opponent,
+        moves: gameHistory.length,
+        timeSeconds: Math.floor((Date.now() - (startTsRef.current ?? Date.now())) / 1000),
+      });
+    } catch (e) {
+      console.warn('nav fallback failed', e);
+    }
+  }
+
+  setTimeout(() => { passInProgressRef.current = false; }, 400);
+};
+
+
+useEffect(() => {
+  try {
+    const lvl = (gameState?.matchSettings?.level as number) ?? 1;
+    const module = getLevelModule(lvl);
+    if (!module) return;
+
+    const modulePuzzle = module.puzzleData ?? module.puzzleData ?? puzzleData;
+    const moduleSolution = module.solutionGrid ?? solutionGrid;
+    const moduleInitialLetters = module.initialLetters ?? initialLetters;
+    const moduleAllAvailable = module.allAvailableLetters ?? allAvailableLetters;
+
+    setLevelPuzzleDataState(modulePuzzle);
+setLevelSolutionGrid(moduleSolution);
+setLevelAllAvailableLetters(moduleAllAvailable);
+const sanitizeLevelGrid = (g: any[][]) => {
+  if (!Array.isArray(g)) return g;
+  return g.map(row => row.map(cell => {
+    if (!cell) return { type: 'empty', text: '' };
+
+    if (cell.type && cell.type !== 'letter') {
+      return { ...cell };
+    }
+    const isPrefilled = !!((cell as any).prefill) || !!(cell.placed) || (!!(cell.text) && String(cell.text).trim().length > 0);
+
+    if (isPrefilled) {
+      return {
+        ...cell,
+        type: 'letter',
+        text: String(cell.text ?? '').toUpperCase(),
+        placed: true,
+      };
+    }
+
+    return { ...cell, text: '', type: 'empty', placed: false, placedBy: undefined };
+  }));
+};
+
+if (Array.isArray(modulePuzzle?.grid)) {
+  justLoadedLevelRef.current = true;
+
+  const cleanedGrid = sanitizeLevelGrid(modulePuzzle.grid);
+  setGrid(cleanedGrid);
+  setTimeout(() => { justLoadedLevelRef.current = false; }, 300);
+
+} else {
+}
+    setScores({ You: 0, Opponent: 0 });
+    setGameHistory([]);
+    setCompletedWords([]);
+    setTurnPlacements([]);
+    setTentativePlacements([]);
+    reservedRef.current = {};
+    setReservedVersion(v => v + 1);
+    setTileLayerVersion(v => v + 1);
+    setBoardVersion(v => v + 1);
+
+    const defaultLives = (gameState?.matchSettings?.lives as number) ?? 3;
+    setLives({ You: defaultLives, Opponent: defaultLives });
+
+    const nowKey = Date.now().toString(36);
+    const newDeck = (Array.isArray(moduleInitialLetters) ? moduleInitialLetters : []).map((ch: string, i: number) => ({
+      id: `lvl-${lvl}-${nowKey}-${i}`,
+      char: (String(ch) ?? '').toUpperCase(),
+      originalIndex: i,
+    }));
+    setLetterDeck(newDeck);
+    setTileLayerVersion(v => v + 1);
+
+    const secs = (gameState?.matchSettings?.turnSeconds as number) ?? TURN_SECONDS;
+    setTimerLeft({ You: secs, Opponent: secs });
+
+   setPreGameVisible(gameState?.mode === 'pvp');
+
+    congratsShownRef.current = false;
+    startTsRef.current = Date.now();
+  } catch (err) {
+    console.warn('[Crossword] load level failed', err);
+  }
+}, [gameState?.matchSettings?.level]);
+
+
+
+
+useEffect(() => {
+  startTsRef.current = Date.now();
+  congratsShownRef.current = false; 
+}, [gameState?.matchId, gameState?.mode]);
+
+
+useEffect(() => {
+  try {
+    if (!gameState || gameState.mode !== "pvp" || !gameState.matchId) {
+      prevMatchIdRef.current = null;
+      return;
+    }
+
+    const cur = gameState.matchId;
+
+    if (prevMatchIdRef.current === cur) return;
+
+    const serverGrid = Array.isArray(gameState.grid) ? gameState.grid : [];
+    let hasPlaced = false;
+    for (let r = 0; r < serverGrid.length && !hasPlaced; r++) {
+      const row = serverGrid[r] ?? [];
+      for (let c = 0; c < row.length; c++) {
+        const cell = row[c];
+        if (cell && (cell.text ?? "").toString().length > 0) {
+          hasPlaced = true;
+          break;
+        }
+      }
+    }
+    prevMatchIdRef.current = cur;
+
+    if (hasPlaced) {
+      console.log("[PreGameCountdown] not showing: server grid already has letters for matchId=", cur);
+      return;
+    }
+
+    if (preGameFiredRef.current[cur]) {
+      console.log("[PreGameCountdown] already fired for matchId=", cur);
+      return;
+    }
+    preGameFiredRef.current[cur] = true;
+
+    console.log("[PreGameCountdown] showing for matchId=", cur);
+    setPreGameVisible(true);
+  } catch (err) {
+    console.warn("PreGameCountdown effect failed", err);
+  }
+}, [gameState?.mode, gameState?.matchId, gameState?.grid]);
+
+
+
+
+  useEffect(() => {
+  const t = setTimeout(() => {
+    reservedRef.current = {};
+    setReservedVersion(v => v + 1);
+    setTileLayerVersion(v => v + 1);
+  }, 0);
+  return () => clearTimeout(t);
+}, [letterDeck.map(d => d.id).join('|')]);
+
+useEffect(() => {
+  if (scoreBarLayout && opponentLocalLayout) {
+    setOpponentLayout({
+      x: scoreBarLayout.x + opponentLocalLayout.x,
+      y: scoreBarLayout.y + opponentLocalLayout.y,
+      width: opponentLocalLayout.width,
+      height: opponentLocalLayout.height,
+    });
+  }
+}, [scoreBarLayout, opponentLocalLayout]);
+
+const prevCompletedRef = useRef<string[]>([]);
+useEffect(() => {
+  const prev = prevCompletedRef.current || [];
+  if (completedWords.length > prev.length) {
+    const added = completedWords.filter(id => !prev.includes(id));
+    added.forEach(id => {
+      if (wordsDisplayedRef.current.has(id)) return;
+
+      const decoded = decodeCompleteId(id);
+      if (!decoded) return;
+      const cells = decoded.cells;
+
+      wordsDisplayedRef.current.add(id);
+      scoreOverlayRef.current?.showWordPoints({ cells, points: decoded.points, owner: "Opponent", duration: 900, position: "center" });
+    });
+  }
+  prevCompletedRef.current = completedWords;
+}, [completedWords, cols, rows]);
+
+useEffect(() => {
+  const placements = gameState?.turnPlacements ?? [];
+  if (!placements || placements.length === 0) return;
+
+  const last = placements[placements.length - 1];
+  if (!last || typeof last.ts === 'undefined' || seenTurnTsRef.current.has(last.ts)) return;
+  seenTurnTsRef.current.add(last.ts);
+  const isByMe = last.by === gameState.playerId;
+  const ownerLabel = isByMe ? "You" : "Opponent";
+
+  const payload = {
+    placements: (last.placements || []).map((p: any) => ({ r: p.row ?? p.r, c: p.col ?? p.c, placed: p.char, correct: p.correct ?? false })),
+    newGrid: gameState.grid,
+    newDeck: gameState.letterDeck,
+    scoreDelta: 0,
+    letters: (last.placements || []).map((p: any) => p.char)
+  };
+
+  setAiOverlayPayload(payload);
+  setAiOverlayVisible(true);
+
+  if (gameState?.mode === 'local') setAiInProgress(true); else setAiInProgress(false);
+
+  (async () => {
+    try {
+      const letterPromises: Promise<void>[] = [];
+      for (const p of payload.placements) {
+        try {
+          const row = p.r;
+          const col = p.c;
+          const placedText = (gameState.grid?.[row]?.[col]?.text ?? '').toString().toUpperCase();
+          const expected = (levelSolutionGrid[row]?.[col] ?? '').toString().toUpperCase();
+          const isCorrect = !!placedText && placedText === expected;
+
+          const pr = scoreOverlayRef.current?.showLetterPoints({
+            row,
+            col,
+            points: isCorrect ? 1 : -1,
+            owner: ownerLabel,
+            duration: 700,
+            position: "top-right",
+          }) ?? Promise.resolve();
+          letterPromises.push(pr);
+        } catch (e) {
+          console.warn("PvP: single placement overlay error", e);
+          letterPromises.push(Promise.resolve());
+        }
+      }
+      await Promise.all(letterPromises);
+    } catch (err) {
+      console.warn("PvP: letter overlay failed:", err);
+    }
+
+    try {
+      const aiCompletedIds: string[] = detectCompletedWords(gameState.grid, levelSolutionGrid);
+      const newForAi = aiCompletedIds.filter(id => !completedWords.includes(id) && !wordsDisplayedRef.current.has(id));
+      if (newForAi.length > 0) {
+        setCompletedWords(prev => ([...prev, ...newForAi]));
+        for (const id of newForAi) {
+          if (wordsDisplayedRef.current.has(id)) continue;
+          const decoded = decodeCompleteId(id);
+          if (!decoded) continue;
+
+          const highlightedGrid = (gameState.grid ?? []).map((row: any[]) => row.map((cell) => ({ ...cell })));
+          const decodedSet = new Set<string>();
+          decoded.cells.forEach(p => decodedSet.add(`${p.r}-${p.c}`));
+          decodedSet.forEach(key => {
+            const [rStr, cStr] = key.split("-");
+            const r = parseInt(rStr, 10);
+            const c = parseInt(cStr, 10);
+            if (!Number.isNaN(r) && !Number.isNaN(c) && highlightedGrid[r] && highlightedGrid[r][c]) {
+              const cell = highlightedGrid[r][c];
+              const expected = (levelSolutionGrid[r]?.[c] ?? "").toString();
+              if (!cell.text && expected) {
+                cell.text = expected;
+                cell.type = "letter";
+                cell.placed = true;
+                cell.placedBy = isByMe ? "You" : "Opponent";
+              }
+              cell.wordHighlight = true;
+              if (cell.recentlyScored) delete (cell as any).recentlyScored;
+              if (cell.tentative) { delete (cell as any).tentative; delete (cell as any).tentativeBy; delete (cell as any).tentativeTileId; }
+            }
+          });
+
+          setGrid(highlightedGrid);
+          setBoardVersion(v => v + 1);
+          await new Promise<void>((res) => setTimeout(() => res(), 40));
+          try {
+            await (scoreOverlayRef.current?.showWordPoints({
+              cells: decoded.cells.map(p => ({ r: p.r, c: p.c })),
+              points: decoded.points,
+              owner: ownerLabel,
+              duration: 900,
+              position: "center",
+            }) ?? Promise.resolve());
+          } catch (err) { console.warn("PvP: word overlay failed:", err); }
+          await new Promise<void>((res) => setTimeout(() => res(), 240));
+          setGrid(prev => prev.map(row => row.map(cell => {
+            const clone = { ...cell };
+            if (clone.wordHighlight) delete clone.wordHighlight;
+            return clone;
+          })));
+          setBoardVersion(v => v + 1);
+          wordsDisplayedRef.current.add(id);
+        }
+      }
+    } catch (err) {
+      console.warn("PvP: word detection/overlay failed:", err);
+    } finally {
+      setAiOverlayVisible(false);
+      setAiOverlayPayload(null);
+    }
+  })();
+
+}, [gameState.turnPlacements, gameState.grid, gameState.letterDeck, gameState.playerId]);
+
+
+
+useEffect(() => {
+  if (!gameState || gameState.mode !== 'pvp' || !gameState.matchId) return;
+  if (Array.isArray(gameState.grid) && gameState.grid.length) {
+    setGrid(gameState.grid);
+    setBoardVersion(v => v + 1);
+  }
+
+  const coerceToArray = (maybeArrOrObj: any) => {
+  if (!maybeArrOrObj) return null;
+  if (Array.isArray(maybeArrOrObj)) return maybeArrOrObj;
+  if (typeof maybeArrOrObj === 'object') {
+    try {
+      const keys = Object.keys(maybeArrOrObj)
+        .map(k => ({ k, n: Number(k) }))
+        .sort((a,b) => (Number.isFinite(a.n) && Number.isFinite(b.n)) ? a.n - b.n : a.k.localeCompare(b.k))
+        .map(x => x.k);
+      return keys.map(k => maybeArrOrObj[k]).filter(Boolean);
+    } catch (e) {
+      return Object.values(maybeArrOrObj).filter(Boolean);
+    }
+  }
+  return null;
+};
+
+const serverDeck = (() => {
+  try {
+    console.log('[CROSSWORD] raw gameState.letterDeck:', gameState?.letterDeck);
+    console.log('[CROSSWORD] raw gameState.playerHands:', (gameState as any)?.playerHands);
+
+    const ph = (gameState as any).playerHands;
+    const myUidLocal = firebaseAuth.currentUser?.uid ?? gameState?.playerId ?? null;
+    const coerceToArrayLocal = (maybeArrOrObj: any) => {
+      if (!maybeArrOrObj) return null;
+      if (Array.isArray(maybeArrOrObj)) return maybeArrOrObj;
+      if (typeof maybeArrOrObj === 'object') {
+        try {
+          const keys = Object.keys(maybeArrOrObj)
+            .map(k => ({ k, n: Number(k) }))
+            .sort((a,b) => (Number.isFinite(a.n) && Number.isFinite(b.n)) ? a.n - b.n : a.k.localeCompare(b.k))
+            .map(x => x.k);
+          return keys.map(k => maybeArrOrObj[k]).filter(Boolean);
+        } catch (e) {
+          return Object.values(maybeArrOrObj).filter(Boolean);
+        }
+      }
+      return null;
+    };
+
+    if (ph && typeof ph === 'object' && myUidLocal && Object.prototype.hasOwnProperty.call(ph, myUidLocal)) {
+      return coerceToArrayLocal(ph[myUidLocal]) ?? null;
+    }
+
+    return coerceToArrayLocal(gameState?.letterDeck ?? null) ?? null;
+  } catch (e) {
+    console.warn('[CROSSWORD] serverDeck coercion error', e);
+    return null;
+  }
+})();
+
+if (serverDeck) {
+  const normalized = serverDeck.map((d: any, idx: number) => {
+    const incomingId = d?.id ?? d?.key ?? d?.uid ?? null;
+    const rawChar = (d?.char ?? d?.ch ?? d?.letter ?? '') + '';
+    const char = rawChar.toString().toUpperCase();
+    const origIndex = (typeof d?.originalIndex === 'number' && d.originalIndex >= 0) ? d.originalIndex : idx;
+    const id = incomingId ? String(incomingId) : `srv-${Date.now().toString(36)}-${idx}-${Math.random().toString(36).slice(2,6)}`;
+    return { id, char, originalIndex: origIndex } as DeckItem;
+  });
+
+  console.log('[CROSSWORD] applying normalized serverDeck -> length=', normalized.length, normalized.map(x => ({id:x.id,char:x.char,orig:x.originalIndex})));
+
+  setLetterDeck(normalized);
+  setTileLayerVersion(v => v + 1);
+
+  reservedRef.current = {};
+  setReservedVersion(v => v + 1);
+}
+// if (serverDeck) {
+//   setLetterDeck(serverDeck);
+//   setTileLayerVersion(v => v + 1);
+// }
+
+  try {
+    const me = gameState.playerId;
+    if (gameState.scores && me) {
+      const youScore = (gameState.scores as any)[me] ?? 0;
+      const otherUid = Object.keys((gameState.scores as any) || {}).find(id => id !== me);
+      const opponentScore = otherUid ? (gameState.scores as any)[otherUid] ?? 0 : (gameState.scores as any)['Opponent'] ?? 0;
+      setScores({ You: youScore, Opponent: opponentScore });
+    }
+  } catch (e) {
+  }
+
+  if (Array.isArray(gameState.completedWords)) setCompletedWords(gameState.completedWords);
+  if (Array.isArray(gameState.turnPlacements)) setTurnPlacements(gameState.turnPlacements);
+}, [gameState?.mode, gameState?.matchId, gameState?.grid, gameState?.letterDeck, gameState?.scores, gameState?.completedWords, gameState?.turnPlacements]);
+
+
+useEffect(() => {
+  try {
+    if (gameState?.mode === 'pvp' && gameState?.matchId && !gameState?.playerId) {
+      const uid = firebaseAuth.currentUser?.uid ?? null;
+      if (uid) {
+        console.warn('[Crossword] fallback: setting playerId in GameContext =>', uid);
+        gameDispatch({ type: 'SET_MATCH', matchId: gameState.matchId, playerId: uid });
+      }
+    }
+  } catch (e) {
+    console.warn('[Crossword] fallback set playerId failed', e);
+  }
+}, [gameState?.mode, gameState?.matchId, gameState?.playerId]);
+
+useEffect(() => {
+}, [gameState?.matchId, gameState?.playerId, gameState?.currentPlayer, firebaseAuth.currentUser?.uid, currentPlayer, effectiveCurrentPlayer, uiLocked]);
+
+useEffect(() => {
+  const secs = (gameState?.matchSettings?.turnSeconds as number) ?? 60;
+  setTimerLeft({ You: secs, Opponent: secs });
+}, [gameState?.matchSettings?.turnSeconds]);
+
+useEffect(() => {
+  try {
+    if (congratsShownRef.current) return;
+
+    if (!isGridComplete(grid)) return;
+    congratsShownRef.current = true;
+    const waitForInFlightWorkToFinish = async (timeoutMs = 5000) => {
+      const start = Date.now();
+      while ((aiScheduledRef.current || aiInProgress || pendingSubmitRef.current) && (Date.now() - start) < timeoutMs) {
+        await new Promise<void>(res => setTimeout(() => res(), 50));
+      }
+      await new Promise<void>(res => setTimeout(() => res(), 160));
+    };
+
+    (async () => {
+      try {
+        const youScore = (scores?.You ?? 0);
+        const oppScore = (scores?.Opponent ?? 0);
+        const currentLevel = (gameState?.matchSettings?.level ?? 1);
+        const nextLevel = currentLevel + 1;
+
+        if (gameState?.mode === 'local') {
+          await waitForInFlightWorkToFinish(5000);
+
+          const finalYou = (scores?.You ?? youScore);
+          const finalOpp = (scores?.Opponent ?? oppScore);
+
+          setTimeout(() => {
+            if (finalYou > finalOpp) {
+              try {
+                navigation.replace('Congratulations', {
+                  winner: 'You',
+                  score: finalYou,
+                  moves: Array.isArray(gameHistory) ? gameHistory.length : undefined,
+                  timeSeconds: Math.floor((Date.now() - (startTsRef.current ?? Date.now())) / 1000),
+                  nextLevel,
+                });
+              } catch (e) {
+                console.warn('Navigation to Congratulations failed (local):', e);
+                Alert.alert('You win!', 'Congratulations — you beat the AI!', [
+                  { text: 'OK', onPress: () => navigation.replace('TestMultiplayer', { startLevel: nextLevel }) }
+                ], { cancelable: false });
+              }
+            } else {
+              Alert.alert('You lose', 'You Lose — Play another game to beat the AI.', [
+                { text: 'OK', onPress: () => navigation.replace('TestMultiplayer') }
+              ], { cancelable: false });
+            }
+          }, 400);
+
+          return;
+        }
+
+        if (gameState?.mode === 'pvp') {
+          try {
+            await waitForInFlightWorkToFinish(4000);
+
+            if (gameState.matchId && typeof updateMatchSettings === 'function') {
+              await updateMatchSettings(gameState.matchId, { ...(gameState.matchSettings || {}), level: nextLevel });
+            } else {
+              navigation.replace('Congratulations', {
+                winner: youScore > oppScore ? 'You' : youScore < oppScore ? 'Opponent' : 'Draw',
+                score: youScore,
+                moves: Array.isArray(gameHistory) ? gameHistory.length : undefined,
+                timeSeconds: Math.floor((Date.now() - (startTsRef.current ?? Date.now())) / 1000),
+              });
+            }
+          } catch (err) {
+            console.warn('Failed to advance PvP round on server (finalize), falling back to local nav', err);
+            navigation.replace('Congratulations', {
+              winner: youScore > oppScore ? 'You' : youScore < oppScore ? 'Opponent' : 'Draw',
+              score: youScore,
+              moves: Array.isArray(gameHistory) ? gameHistory.length : undefined,
+              timeSeconds: Math.floor((Date.now() - (startTsRef.current ?? Date.now())) / 1000),
+            });
+          } finally {
+            congratsShownRef.current = false;
+          }
+        }
+      } catch (err) {
+        console.warn('Congrats finalize failed', err);
+        congratsShownRef.current = false;
+      }
+    })();
+  } catch (err) { console.warn('Congrats check failed', err); }
+}, [grid, completedWords, scores.You, scores.Opponent, gameHistory.length]);
+
+useEffect(() => {
+  try {
+    const finished = gameState?.finished ?? null;
+    if (!finished) return;
+
+    const winnerUid = finished?.winnerUid ?? (gameState?.winnerUid ?? null);
+    const loserUid = finished?.loserUid ?? null;
+
+    const iAmLoser = !!(loserUid && myUid && loserUid === myUid);
+
+    if (iAmLoser) {
+      setOutOfLivesSide('You'); 
+      setOutOfLivesVisible(true);
+    } else {
+      const winnerLabel = (winnerUid && winnerUid === myUid) ? 'You' : 'Opponent';
+      const scoreForWinner = winnerUid === myUid ? scores.You : scores.Opponent;
+
+      try {
+        navigation.replace('Congratulations', {
+          winner: winnerLabel,
+          score: scoreForWinner,
+          moves: Array.isArray(gameHistory) ? gameHistory.length : undefined,
+          timeSeconds: Math.floor((Date.now() - (startTsRef.current ?? Date.now())) / 1000),
+        });
+      } catch (e) {
+        console.warn('Navigation to Congratulations failed', e);
+      }
+    }
+  } catch (err) {
+    console.warn('finish-match effect failed', err);
+  }
+}, [gameState?.finished, gameState?.winnerUid, myUid, scores.You, scores.Opponent, gameHistory.length]);
+
+
+useEffect(() => {
+  try {
+    if (!showLivesEnabled) return;
+    if (!gameState || gameState.mode !== 'pvp' || !gameState.matchId) return;
+
+    const serverLives = (gameState as any).playerLives ?? null;
+    if (!serverLives || typeof serverLives !== 'object') return;
+
+    const meUidLocal = firebaseAuth.currentUser?.uid ?? gameState.playerId ?? null;
+    const otherUid = meUidLocal ? Object.keys(serverLives).find(u => u !== meUidLocal) ?? null : null;
+
+    const myLives = meUidLocal ? (typeof serverLives[meUidLocal] === 'number' ? serverLives[meUidLocal] : null) : null;
+    const oppLives = otherUid ? (typeof serverLives[otherUid] === 'number' ? serverLives[otherUid] : null) : null;
+
+    setLives(prev => {
+      const next = { You: typeof myLives === 'number' ? myLives : prev.You, Opponent: typeof oppLives === 'number' ? oppLives : prev.Opponent };
+      if (next.You === prev.You && next.Opponent === prev.Opponent) return prev;
+      return next;
+    });
+
+    if (typeof myLives === 'number' && myLives <= 0) {
+      if (!passInProgressRef.current && !outOfLivesVisible) {
+        console.log('[Crossword] server reported myLives <= 0 -> finishMatch("You")');
+        finishMatch("You");
+      }
+      return;
+    }
+
+    if (typeof oppLives === 'number' && oppLives <= 0) {
+      if (!passInProgressRef.current && !outOfLivesVisible) {
+        console.log('[Crossword] server reported oppLives <= 0 -> finishMatch("Opponent")');
+        finishMatch("Opponent");
+      }
+      return;
+    }
+
+  } catch (err) {
+    console.warn('[Crossword] playerLives watch failed', err);
+  }
+}, [gameState?.playerLives, gameState?.mode, gameState?.matchId, gameState?.playerId, outOfLivesVisible, showLivesEnabled]);
+
 
   return (
-    <View style={styles.container}>
-      {/* Header */}
+    <><InGameBanner />
+    <PreGameCountdown
+  visible={preGameVisible}
+  startFrom={3}
+  onFinish={() => {
+    setPreGameVisible(false);
+  }}
+/>
+{/* Out of lives modal */}
+<OutOfLivesModal
+  visible={outOfLivesVisible}
+  message="You lose — all chances used."
+  onClose={() => {
+    setOutOfLivesVisible(false);
+    navigation.replace('TestMultiplayer');
+  }}
+  onReturnToLobby={() => navigation.replace('TestMultiplayer')}
+/>
+    <LinearGradient
+      colors={['#2A184D', '#4B2E78', '#8C5CC7']}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={styles.container}
+    >
+      
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton}>
-          <Text style={styles.backButtonText}>←</Text>
-        </TouchableOpacity>
+        <TouchableOpacity
+  style={styles.backButton}
+  onPress={() => navigation.navigate('TestMultiplayer', {
+    startLevel: (gameState?.matchSettings?.level ?? 1)
+  })}
+>
+  <Text style={styles.backButtonText}>←</Text>
+</TouchableOpacity>
         <Text style={styles.title}>Puzzle</Text>
-        <TouchableOpacity style={styles.settingsButton}>
-          <Text style={styles.settingsButtonText}>⚙️</Text>
-        </TouchableOpacity>
       </View>
 
-      {/* Score Display */}
-      <View style={styles.scoreContainer}>
-        <View style={styles.scoreSection}>
-          <Text style={styles.scoreLabel}>You</Text>
-          <Text style={styles.scoreValue}>{scores.You}</Text>
-        </View>
-        <Text style={styles.vsText}>vs</Text>
-        <View style={styles.scoreSection}>
-          <Text style={styles.scoreLabel}>Opponent</Text>
-          <Text style={styles.scoreValue}>{scores.Opponent}</Text>
+<LinearGradient
+  colors={['rgba(255,255,255,0.07)', 'rgba(255,255,255,0.03)']}
+  start={{ x: 0, y: 0 }}
+  end={{ x: 1, y: 0 }}
+  style={styles.scoreContainerGradient}
+  onLayout={(e) => {
+    const { x, y, width, height } = e.nativeEvent.layout;
+    setScoreBarLayout({ x, y, width, height });
+  } }
+>
+  <View style={[styles.scoreSection, { justifyContent: 'flex-start', paddingLeft: 12 }]}>
+    <Text style={styles.scoreLabelLight}>You</Text>
 
-        </View>
+    <AnimatedScore value={scores.You} style={[styles.scoreValueLight, { marginLeft: 8 }]} durationMs={600} />
+
+    {showLivesEnabled ? (
+      <View style={{ marginLeft: 8, alignItems: 'center' }}>
+        <LivesIndicator
+          lives={lives.You}
+          maxLives={3}
+          size={12}
+          blinkingIndex={effectiveCurrentPlayer === "You" && timerLeft.You <= 10 && timerLeft.You > 0 ? (lives.You > 0 ? lives.You - 1 : null) : null}
+          testID="lives-you" />
       </View>
+    ) : null}
 
-      {/* Game Board */}
-      <ScrollView style={styles.boardContainer} showsVerticalScrollIndicator={false}>
-        <View style={styles.board}>
-          {grid.map((row, rowIndex) => (
-            <View key={rowIndex} style={styles.row}>
-              {row.map((cell, colIndex) => (
-                <TouchableOpacity
-                  key={`${rowIndex}-${colIndex}`}
-                  style={getCellStyle(cell)}
-                  onPress={() => placeLetter(rowIndex, colIndex)}
+    {showLivesEnabled ? (
+      <View style={{ position: 'absolute', left: 8 + 0, top: 28 }}>
+        <TurnTimer
+          side="You"
+          size={32}
+          strokeWidth={4}
+          onExpire={() => handleTimerExpire("You")}
+          onTick={handleTimerTick("You")} />
+      </View>
+    ) : null}
+  </View>
+
+  {}<View>
+  <Text style={styles.vsTextLight}>VS</Text>
+  </View>
+
+  <View
+    style={[styles.scoreSection, { justifyContent: 'flex-end', paddingRight: 12 }]}
+    onLayout={(e) => {
+      const { x, y, width, height } = e.nativeEvent.layout;
+      setOpponentLocalLayout({ x, y, width, height });
+
+      if (scoreBarLayout) {
+        setOpponentLayout({
+          x: scoreBarLayout.x + x,
+          y: scoreBarLayout.y + y,
+          width,
+          height,
+        });
+      } else {
+        setOpponentLayout({ x, y, width, height });
+      }
+    } }
+  >
+     {showLivesEnabled ? (
+      <View style={{ marginLeft: 8, alignItems: 'center' }}>
+        <LivesIndicator
+          lives={lives.Opponent}
+          maxLives={3}
+          size={12}
+          blinkingIndex={effectiveCurrentPlayer === "Opponent" && timerLeft.Opponent <= 10 && timerLeft.Opponent > 0 ? (lives.Opponent > 0 ? lives.Opponent - 1 : null) : null}
+          testID="lives-opp" />
+      </View>
+    ) : null}
+    <Text style={styles.scoreLabelLight}>Opponent</Text>
+    <AnimatedScore value={scores.Opponent} style={[styles.scoreValueLight, { marginLeft: 8 }]} durationMs={600} />
+
+   
+
+    {showLivesEnabled ? (
+      <View style={{ position: 'absolute', right: 12, top: 28 }}>
+        <TurnTimer
+          side="Opponent"
+          size={32}
+          strokeWidth={4}
+          onExpire={() => handleTimerExpire("Opponent")}
+          onTick={handleTimerTick("Opponent")} />
+      </View>
+    ) : null}
+  </View>
+</LinearGradient>
+      {gameState?.mode === 'local' && (
+        <AiBubbleOverlay
+          visible={aiOverlayVisible}
+          resultPayload={aiOverlayPayload}
+          opponentLayout={opponentLayout}
+          boardLayout={boardLayoutOuter}
+          cellSize={CELL_SIZE}
+          tileSize={36}
+          flightDuration={900}
+          onFinish={async (result) => {
+            if (!result) {
+              setAiOverlayVisible(false);
+              setAiOverlayPayload(null);
+              aiScheduledRef.current = false;
+              passInProgressRef.current = false;
+              setIsSubmitting(false);
+              setAiInProgress(false);
+              setCurrentPlayer("You");
+              return;
+            }
+
+            if (gameState?.mode === 'pvp') {
+              try {
+              } catch (err) { console.warn('PvP overlay finish error', err); }
+              setAiOverlayVisible(false);
+              setAiOverlayPayload(null);
+              setAiInProgress(false);
+              setIsSubmitting(false);
+              return;
+            }
+
+            try {
+              const aiPlacements = Array.isArray(result.placements) ? result.placements : [];
+              const displayGrid = (result.newGrid ?? []).map((row: any[]) => row.map((cell) => ({ ...cell })));
+
+              for (const p of aiPlacements) {
+                const r = p.r ?? p.r; 
+                const c = p.c ?? p.c;
+                if (displayGrid[r] && displayGrid[r][c]) {
+                  displayGrid[r][c] = {
+                    ...displayGrid[r][c],
+                    recentlyScored: p.correct ? "correct" : "wrong",
+                  };
+                }
+              }
+
+              setGrid(displayGrid);
+              setTileLayerVersion(v => v + 1);
+              setBoardVersion(v => v + 1);
+              setShowTileLayer(true);
+
+              const letterPromises: Promise<void>[] = [];
+              try {
+                if (scoreOverlayRef?.current) {
+                  for (const p of aiPlacements) {
+                    const row = p.r;
+                    const col = p.c;
+                    const after = displayGrid[row]?.[col];
+                    if (after && after.text && after.placedBy === "Opponent") {
+                      const pr = scoreOverlayRef.current.showLetterPoints({
+                        row,
+                        col,
+                        points: p.correct ? 1 : -1,
+                        owner: "Opponent",
+                        duration: 700,
+                        position: "top-right",
+                      }) ?? Promise.resolve();
+                      letterPromises.push(pr);
+                    }
+                  }
+                }
+                await Promise.all(letterPromises);
+              } catch (err) {
+                console.warn("AI letter overlay promises failed:", err);
+              }
+
+              const aiCompletedIds: string[] = detectCompletedWords(result.newGrid, levelSolutionGrid);
+              const newForAi = aiCompletedIds.filter(id => !completedWords.includes(id));
+
+              if (newForAi.length > 0) {
+                setCompletedWords(prev => ([...prev, ...newForAi]));
+
+                const opponentBonus = newForAi.reduce((acc, id) => {
+                  const decoded = decodeCompleteId(id);
+                  return acc + (decoded ? decoded.points : 0);
+                }, 0);
+                if (opponentBonus > 0) {
+                  setScores(prev => ({ ...prev, Opponent: (prev.Opponent ?? 0) + opponentBonus }));
+                }
+
+                for (const id of newForAi) {
+                  if (wordsDisplayedRef.current.has(id)) continue;
+                  const decoded = decodeCompleteId(id);
+                  if (!decoded) continue;
+
+                  const decodedSet = new Set<string>();
+                  decoded.cells.forEach(p => decodedSet.add(`${p.r}-${p.c}`));
+
+                  const highlightedGrid = (result.newGrid ?? []).map((row: any[]) => row.map((cell) => ({ ...cell })));
+
+                  decodedSet.forEach(key => {
+                    const [rStr, cStr] = key.split("-");
+                    const r = parseInt(rStr, 10);
+                    const c = parseInt(cStr, 10);
+                    if (!Number.isNaN(r) && !Number.isNaN(c) && highlightedGrid[r] && highlightedGrid[r][c]) {
+                      const cell = highlightedGrid[r][c];
+                      const expected = (levelSolutionGrid[r]?.[c] ?? "").toString();
+                      if (!cell.text && expected) {
+                        cell.text = expected;
+                        cell.type = "letter";
+                        cell.placed = true;
+                        cell.placedBy = "Opponent";
+                      }
+                      cell.wordHighlight = true;
+                      if (cell.recentlyScored) delete (cell as any).recentlyScored;
+                      if (cell.tentative) { delete (cell as any).tentative; delete (cell as any).tentativeBy; delete (cell as any).tentativeTileId; }
+                    }
+                  });
+
+                  setGrid(highlightedGrid);
+                  setBoardVersion(v => v + 1);
+                  await new Promise<void>((res) => setTimeout(() => res(), 40));
+                  try {
+                    await (scoreOverlayRef.current?.showWordPoints({
+                      cells: decoded.cells.map(p => ({ r: p.r, c: p.c })),
+                      points: decoded.points,
+                      owner: "Opponent",
+                      duration: 900,
+                      position: "center",
+                    }) ?? Promise.resolve());
+                  } catch (err) {
+                    console.warn("AI word overlay failed:", err);
+                  }
+
+                  await new Promise<void>((res) => setTimeout(() => res(), 240));
+                  setGrid(prev => prev.map(row => row.map(cell => {
+                    const clone = { ...cell };
+                    if (clone.wordHighlight) delete clone.wordHighlight;
+                    return clone;
+                  })));
+
+                  setBoardVersion(v => v + 1);
+
+                  wordsDisplayedRef.current.add(id);
+                }
+              }
+
+              setTimeout(() => {
+                setGrid(prev => prev.map((row) => row.map((cell) => {
+                  const copy = { ...cell } as any;
+                  if (copy.recentlyScored) delete copy.recentlyScored;
+                  return copy;
+                })));
+              }, 120);
+
+try {
+  const aiDeck = Array.isArray(result.newDeck) ? result.newDeck.map(d => ({ ...d })) : null;
+  const pending = pendingSubmitRef.current ?? null;
+
+  const finalGrid = Array.isArray(result.newGrid) ? result.newGrid : grid;
+
+  const returnsForPlayer = Array.isArray(pending?.returns) ? pending.returns.map(r => ({
+    id: r.id ?? mkIdLocal((r.char ?? '').toString()),
+    char: (r.char ?? '').toString().toUpperCase()
+  })) : [];
+
+  let baseForPlayerBuild: DeckItem[] = [];
+  if (Array.isArray(pending?.existingDeck) && pending.existingDeck.length > 0) {
+    baseForPlayerBuild = pending.existingDeck.map(d => ({ ...d }));
+  } else if (Array.isArray(aiDeck) && aiDeck.length > 0) {
+    baseForPlayerBuild = aiDeck.map(d => ({ ...d }));
+  } else {
+    baseForPlayerBuild = []; 
+  }
+
+  const playerDeckAfterAi = buildSmartDeck(
+    baseForPlayerBuild,
+    returnsForPlayer,
+    finalGrid,
+    levelSolutionGrid, 
+    levelAllAvailableLetters,
+    5
+  );
+
+  setLetterDeck(playerDeckAfterAi);
+} catch (err) {
+  console.warn("Ai onFinish: failed to compute/commit player's deck atomically", err);
+  if (Array.isArray(result.newDeck)) setLetterDeck(result.newDeck);
+} finally {
+  pendingSubmitRef.current = null;
+}
+
+setTileLayerVersion(v => v + 1);
+setBoardVersion(v => v + 1);
+setShowTileLayer(true);
+
+if (typeof result.scoreDelta === "number" && result.scoreDelta !== 0) {
+  setScores(prev => ({ ...prev, Opponent: (prev.Opponent ?? 0) + result.scoreDelta }));
+}
+
+
+            } catch (err) {
+              console.warn("AI onFinish handler failed:", err);
+              try {
+                setGrid(result.newGrid);
+                if (result.scoreDelta && result.scoreDelta > 0) setScores(prev => ({ ...prev, Opponent: (prev.Opponent ?? 0) + result.scoreDelta }));
+              } catch (_) { }
+            } finally {
+              aiScheduledRef.current = false;
+              passInProgressRef.current = false;
+              setIsSubmitting(false);
+              setAiInProgress(false);
+              setCurrentPlayer("You");
+
+              setAiOverlayVisible(false);
+              setAiOverlayPayload(null);
+            }
+          } } />
+      )}
+      <ScoreOverlay
+        ref={scoreOverlayRef}
+        boardLayout={boardLayoutOuter ?? boardLayoutInner}
+        rows={rows}
+        cols={cols}
+        cellSize={CELL_SIZE} />
+
+
+      <View
+        style={{ alignSelf: "center", width: cols * CELL_SIZE, position: "relative" }}
+        onLayout={(e) => {
+          const { x, y, width, height } = e.nativeEvent.layout;
+          setBoardLayoutOuter({ x, y, width, height });
+        } }
+      >
+        <LinearGradient
+          colors={['rgba(255,255,255,0.06)', 'rgba(255,255,255,0.03)']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.boardFrame}
+        >
+          <View
+            key={`board-${boardVersion}`}
+            style={[styles.board, { width: cols * CELL_SIZE, height: rows * CELL_SIZE }]}
+            onLayout={(e) => {
+              const { x, y, width, height } = e.nativeEvent.layout;
+              setBoardLayoutInner({ x, y, width, height });
+            } }
+
+          >
+            {grid.map((row, rowIndex) => (
+              <View key={rowIndex} style={styles.row}>
+                {row.map((cell, colIndex) => {
+                  const tentativeForCell = tentativeMap.get(`${rowIndex}-${colIndex}`);
+                  const displayChar = tentativeForCell ? tentativeForCell.char : cell.text;
+                  const isNeon = !!(tentativeForCell || (cell.type === 'letter' && (cell.placed || cell.tentative)));
+
+                  const baseStyle = getCellStyle(cell);
+
+                  const hinted = hintedSet.has(`${rowIndex}-${colIndex}`);
+
+return (
+  <View
+    key={`${rowIndex}-${colIndex}-wrap`}
+    style={{
+      width: CELL_SIZE,
+      height: CELL_SIZE,
+      position: 'relative',
+      overflow: 'visible', 
+    }}
+  >
+    <TouchableOpacity
+      key={`${rowIndex}-${colIndex}`}
+      style={[
+        ...Array.isArray(baseStyle) ? baseStyle : [baseStyle],
+        { width: CELL_SIZE, height: CELL_SIZE, justifyContent: 'center', alignItems: 'center' },
+        isNeon && styles.neonCell,
+        hinted && styles.hintCell,
+        (cell.recentlyScored === 'correct' && styles.scoredCorrect) ||
+        (cell.recentlyScored === 'wrong' && styles.scoredWrong) ||
+        (cell.wordHighlight && styles.wordHighlightBorder),
+      ]}
+      onPress={() => boundPlaceLetter(rowIndex, colIndex)}
+      disabled={uiLocked}
+    >
+      {cell.imageLocal ? (
+        <Image
+          source={cell.imageLocal}
+          style={{
+            width: Math.round(CELL_SIZE * 0.60),
+            height: Math.round(CELL_SIZE * 0.60),
+            margin: 0,
+          }}
+          resizeMode="contain"
+          accessibilityLabel={cell.alt ?? ''}
+        />
+      ) : (() => {
+        const typed = (cell as any).hintLines &&
+          Array.isArray((cell as any).hintLines) &&
+          (cell as any).hintLines.length > 0
+            ? (cell as any).hintLines.map((h:any) => ({ text: (h.text||'').trim(), hintDir: h.hintDir }))
+            : null;
+
+        const slashParts = (!typed && typeof cell.text === 'string' && cell.text.includes('/'))
+          ? cell.text.split('/').map(s => ({ text: s.trim() }))
+          : null;
+
+        if (cell.type === 'letter' || (displayChar && displayChar.length === 1 && cell.type !== 'clue')) {
+          return (
+            <Text
+              numberOfLines={1}
+              allowFontScaling={false}
+              style={{
+                fontSize: Math.round(CELL_SIZE * 0.38),
+                lineHeight: Math.round(CELL_SIZE * 0.56),
+                fontWeight: '700',
+                color: '#fff',
+                textAlign: 'center',
+                includeFontPadding: false,
+              }}
+            >
+              {displayChar}
+            </Text>
+          );
+        }
+
+        if (cell.type === 'clue' && (typed || slashParts)) {
+          const parts = typed ? typed : slashParts!;
+          const CLUE_FONT = Math.max(8, Math.round(CELL_SIZE * 0.14));
+          return (
+            <View style={{
+              width: '100%',
+              height: '100%',
+              alignItems: 'center',
+              justifyContent: 'center',
+              paddingHorizontal: 2,
+              paddingVertical: 2,
+            }}>
+              {parts.map((hl: any, idx: number) => (
+                <View
+                  key={idx}
+                  style={{
+                    width: '100%',
+                    flex: 1,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderBottomWidth: idx === parts.length - 1 ? 0 : StyleSheet.hairlineWidth,
+                    borderBottomColor: 'rgba(255,255,255,0.14)',
+                    paddingVertical: 0,
+                  }}
                 >
                   <Text
-                    style={[
-                      styles.cellText,
-                      cell.type === "clue" && styles.clueText,
-                      cell.type === "letter" && styles.letterText,
-                      cell.type === "special" && styles.specialText,
-                    ]}
+                    numberOfLines={2}
+                    ellipsizeMode="tail"
+                    allowFontScaling={true}
+                    adjustsFontSizeToFit={true}
+                    minimumFontScale={0.45}
+                    style={{
+                      fontSize: CLUE_FONT + 1,
+                      lineHeight: CLUE_FONT + 2,
+                      fontWeight: '700',
+                      color: '#F3E8FF',
+                      textAlign: 'center',
+                      includeFontPadding: false,
+                      paddingHorizontal: 2,
+                    }}
                   >
-                    {cell.text}
+                    {hl.text}
                   </Text>
-                </TouchableOpacity>
+                </View>
               ))}
             </View>
-          ))}
-        </View>
-      </ScrollView>
+          );
+        }
 
-      {/* Letter Deck */}
-      {currentPlayer === "You" && (
-        <View style={styles.letterDeckContainer}>
+        return (
+          <Text
+            numberOfLines={2}
+            ellipsizeMode="tail"
+            allowFontScaling={true}
+            adjustsFontSizeToFit={true}
+            minimumFontScale={0.55}
+            style={{
+              fontSize: Math.max(9, Math.round(CELL_SIZE * 0.15)),
+              lineHeight: Math.round(CELL_SIZE * 0.17) + 2,
+              fontWeight: '700',
+              color: '#F3E8FF',
+              textAlign: 'center',
+              includeFontPadding: false,
+              paddingHorizontal: 2,
+            }}
+          >
+            {cell.text}
+          </Text>
+        );
+      })()}
+    </TouchableOpacity>
+
+    {(() => {
+      const typed = (cell as any).hintLines && Array.isArray((cell as any).hintLines) && (cell as any).hintLines.length > 0
+        ? (cell as any).hintLines.map((h:any) => ({ text: (h.text||'').trim(), hintDir: h.hintDir }))
+        : null;
+
+      const slashParts = (!typed && typeof cell.text === 'string' && cell.text.includes('/'))
+        ? cell.text.split('/').map(s => ({ text: s.trim() }))
+        : null;
+
+      let showRight = false;
+      let showDown = false;
+
+      if (typed) {
+        showRight = typed.some((h:any) => h.hintDir === 'across');
+        showDown = typed.some((h:any) => h.hintDir === 'down');
+        if (!showRight && !showDown && typed.length === 2) { showRight = true; showDown = true; }
+      } else if (slashParts) {
+        if (slashParts.length >= 2) { showRight = true; showDown = true; }
+        else { showRight = cell.hintDir === 'across'; showDown = cell.hintDir === 'down'; }
+      } else {
+        showRight = cell.hintDir === 'across';
+        showDown = cell.hintDir === 'down';
+      }
+
+      const eligibleForArrows = (cell.type === 'clue' || cell.type === 'icon');
+      const ARROW_SIZE = Math.max(8, Math.round(CELL_SIZE * 0.14));
+      const OUTER_OFFSET = Math.round(ARROW_SIZE + 2);
+
+      const rightTop = (typed && typed.length === 2) || (slashParts && slashParts.length >= 2) ? '30%' : '50%';
+      const rightMarginTop = -Math.round(ARROW_SIZE / 2);
+
+      return (
+        <>
+          {eligibleForArrows && showRight && (
+            <Text
+              allowFontScaling={false}
+              style={{
+                position: 'absolute',
+                right: -OUTER_OFFSET + 4,
+                top: rightTop,
+                marginTop: rightMarginTop,
+                fontSize: ARROW_SIZE,
+                lineHeight: ARROW_SIZE,
+                color: 'rgba(255,255,255,0.95)',
+                fontWeight: '800',
+                textShadowColor: 'rgba(0,0,0,0.25)',
+                textShadowRadius: 1,
+                textShadowOffset: { width: 0, height: 0.5 },
+              }}
+            >
+              ►
+            </Text>
+          )}
+
+          {eligibleForArrows && showDown && (
+            <Text
+              allowFontScaling={false}
+              style={{
+                position: 'absolute',
+                bottom: -OUTER_OFFSET + 2,
+                left: '50%',
+                marginLeft: -Math.round(ARROW_SIZE / 2),
+                fontSize: ARROW_SIZE - 2,
+                lineHeight: ARROW_SIZE,
+                color: 'rgba(255,255,255,0.95)',
+                fontWeight: '800',
+                textShadowColor: 'rgba(0,0,0,0.25)',
+                textShadowRadius: 1,
+                textShadowOffset: { width: 0, height: 0.5 },
+              }}
+            >
+              ▼
+            </Text>
+          )}
+        </>
+      );
+    })()}
+  </View>
+);
+
+
+
+                })}
+
+              </View>
+            ))}
+          </View>
+        </LinearGradient>
+
+        {showTileLayer && boardLayoutInner && isMyTurn && (
+          <DraggableTileLayer
+            key={`tile-layer-${tileLayerVersion}`}
+            tiles={draggableTiles}
+            tileLayerVersion={tileLayerVersion}
+            boardLayout={boardLayoutInner}
+            rows={grid.length}
+            cols={grid[0]?.length ?? 6}
+            tileSize={42}
+            snapThreshold={0.45}
+            isCellOccupied={isCellOccupied}
+            onTilePick={handleTilePick}
+            onTileDropped={(tileId, r, c) => handleTileDrop(tileId, r, c)} />
+        )}
+      </View>
+
+      <View style={[styles.letterDeckContainer, uiLocked && { opacity: 0.7 }]}>
+        {(draggableTiles.length === 0 || aiInProgress || uiLocked) ? (
           <View style={styles.letterDeck}>
-            {letterDeck.map((letter, index) => (
+            {letterDeck.map((item, index) => (
               <TouchableOpacity
-                key={index}
-                style={[styles.letterTile, selectedLetterIndex === index && styles.selectedLetterTile]}
-                onPress={() => setSelectedLetterIndex(index)}
+                key={item.id}
+                style={[
+                  styles.letterTile,
+                  selectedLetterIndex === index && styles.selectedLetterTile,
+                  uiLocked && { opacity: 0.2 }
+                ]}
+                onPress={() => { if (!uiLocked) setSelectedLetterIndex(index); } }
+                disabled={uiLocked}
+                accessibilityState={{ disabled: uiLocked }}
               >
-                <Text style={styles.letterTileText}>{letter}</Text>
+                <Text style={styles.letterTileText}>{item.char}</Text>
               </TouchableOpacity>
             ))}
           </View>
-          {letterDeck.length === 0 && (
-            <TouchableOpacity style={styles.refillButton} onPress={refillLetterDeck}>
-              <Text style={styles.refillButtonText}>🔄 Get New Letters</Text>
-            </TouchableOpacity>
-          )}
+        ) : (
+          <View style={{ height: 70 }} />
+        )}
+      </View>
+
+      <View style={styles.actionButtonsContainer}>
+        <View style={styles.actionButtonsInner}>
+          <TouchableOpacity
+            style={styles.shuffleButton}
+            onPress={() => setSwapModalVisible(true)}
+            disabled={uiLocked}
+            accessibilityState={{ disabled: uiLocked }}
+          >
+            <Image
+              source={require("../assets/swap.png")}
+              style={{ width: 53, height: 53, resizeMode: "contain" }} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+    style={styles.submitInnerBtn}
+    onPress={handleSubmit}
+    disabled={uiLocked}
+    activeOpacity={0.85}
+  >
+          <LinearGradient
+  colors={[ '#8C5CC7','#4B2E78',  '#2A184D']}  
+  start={{ x: 0, y: 0 }}
+  end={{ x: 1, y: 1 }}
+  style={[
+    styles.submitGradientBtn,
+    uiLocked && { opacity: 0.6 },
+  ]}
+>
+  
+    <Text style={styles.submitText}>Submit</Text>
+  
+</LinearGradient>
+</TouchableOpacity>
+
+          <HintButton hookResult={hints} disabled={currentPlayer !== "You" || isSubmitting || aiInProgress} />
+
         </View>
+      </View>
+
+
+
+
+      <SwapModal
+        visible={swapModalVisible}
+        onClose={() => setSwapModalVisible(false)}
+        letterDeck={letterDeck}
+        onSwap={(selectedIds) => {
+          swapTiles({ ...logicProps, letterDeck, setLetterDeck }, selectedIds, (newDeck) => {
+            reservedRef.current = {};
+            setReservedVersion((v) => v + 1);
+            setTileLayerVersion((v) => v + 1);
+            setShowTileLayer(true);
+          });
+        } }
+        onSwapAndPass={(selectedIds: string[]) => {
+          swapTilesAndPass(
+            { ...logicProps, letterDeck, setLetterDeck },
+            selectedIds,
+            (newDeck: DeckItem[], nextGrid?: GridCell[][]) => {
+              reservedRef.current = {};
+              setReservedVersion((v) => v + 1);
+              setTileLayerVersion((v) => v + 1);
+              setShowTileLayer(true);
+
+              if (gameState?.mode === 'local') {
+                if (!aiScheduledRef.current) {
+                  aiScheduledRef.current = true;
+                  setCurrentPlayer("Opponent");
+
+                  const sourceGrid: GridCell[][] = Array.isArray(nextGrid) ? nextGrid : grid;
+
+                  const cleanGridForAI: GridCell[][] = sourceGrid.map((row: GridCell[]) => row.map((cell: GridCell) => {
+                    const c = { ...cell } as GridCell & Record<string, any>;
+                    if ((c as any).recentlyScored) delete (c as any).recentlyScored;
+                    return c;
+                  })
+                  );
+
+                  startAiSequence({ ...logicProps, grid: cleanGridForAI, letterDeck: newDeck }, 1);
+                }
+              }
+            }
+          );
+        } } />
+      {gameState?.mode === 'pvp' && (
+        <Chat matchId={gameState.matchId} playerId={gameState.playerId} visible={true} />
       )}
 
-      {/* Action Buttons */}
-      {currentPlayer === "You" && (
-        <View style={styles.actionButtons}>
-          <TouchableOpacity style={styles.shuffleButton}>
-            <Text style={styles.shuffleButtonText}>🔄</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.passButton} onPress={passTurn}>
-            <Text style={styles.passButtonText}>Pass</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.hintButton}>
-            <Text style={styles.hintButtonText}>💡</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* Completed Words Display */}
-      {/* {completedWords.length > 0 && (
-        <View style={styles.completedContainer}>
-          <Text style={styles.completedTitle}>🏆 Completed Lines:</Text>
-          <Text style={styles.completedText}>
-            {completedWords.filter((w) => w.startsWith("complete-row")).length} complete rows +{" "}
-            {completedWords.filter((w) => w.startsWith("complete-column")).length} complete columns finished!
-          </Text>
-        </View>
-      )} */}
-
-      {/* Game History */}
-      {/* {gameHistory.length > 0 && (
-        <View style={styles.historyContainer}>
-          <Text style={styles.historyTitle}>Game Log:</Text>
-          <ScrollView style={styles.historyScroll} showsVerticalScrollIndicator={false}>
-            {gameHistory.slice(-3).map((entry, index) => (
-              <Text key={index} style={styles.historyText}>
-                {entry}
-              </Text>
-            ))}
-          </ScrollView>
-        </View>
-      )} */}
-
-      {/* Reset Button */}
-      <TouchableOpacity style={styles.resetButton} onPress={resetGame}>
-        <Text style={styles.resetButtonText}>🔄 Reset Game</Text>
-      </TouchableOpacity>
-    </View>
+      <AdBanner />
+    </LinearGradient></>
   )
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#f0f4f8",
-    paddingTop: 50,
-  },
-  header: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-  },
-  backButton: {
-    padding: 10,
-  },
-  backButtonText: {
-    fontSize: 24,
-    color: "#007AFF",
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: "600",
-    color: "#333",
-  },
-  settingsButton: {
-    padding: 10,
-  },
-  settingsButtonText: {
-    fontSize: 20,
-  },
-  scoreContainer: {
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    paddingVertical: 10,
-    backgroundColor: "white",
-    marginHorizontal: 10,
-    borderRadius: 10,
-    marginBottom: 15,
-  },
-  scoreSection: {
-    alignItems: "center",
-    flex: 1,
-  },
-  scoreLabel: {
-    fontSize: 14,
-    color: "#666",
-    marginBottom: 2,
-  },
-  scoreValue: {
-    fontSize: 22,
-    fontWeight: "bold",
-    color: "#333",
-  },
-  vsText: {
-    fontSize: 20,
-    color: "#999",
-    marginHorizontal: 2,
-  },
-  boardContainer: {
-    flex: 1,
-    paddingHorizontal: 10,
-  },
-  board: {
-    backgroundColor: "white",
-    borderRadius: 10,
-    padding: 5,
-    alignSelf: "center",
-  },
-  row: {
-    flexDirection: "row",
-  },
-  cell: {
-    width: 45,
-    height: 45,
-    margin: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    borderRadius: 3,
-  },
-  clueCell: {
-    width: 45,
-    height: 45,
-    margin: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    borderRadius: 3,
-    backgroundColor: "#E3F2FD",
-    padding: 2,
-  },
-  letterCell: {
-    width: 45,
-    height: 45,
-    margin: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    borderRadius: 3,
-    backgroundColor: "#FFFFFF",
-    borderWidth: 1,
-    borderColor: "#E0E0E0",
-  },
-  emptyCell: {
-    width: 45,
-    height: 45,
-    margin: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    borderRadius: 3,
-    backgroundColor: "#F5F5F5",
-    borderWidth: 1,
-    borderColor: "#E0E0E0",
-  },
-  specialCell: {
-    width: 45,
-    height: 45,
-    margin: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    borderRadius: 20,
-    backgroundColor: "#FF9800",
-  },
-  iconCell: {
-    width: 45,
-    height: 45,
-    margin: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    borderRadius: 3,
-    backgroundColor: "#E3F2FD",
-  },
-  cellText: {
-    fontSize: 10,
-    textAlign: "center",
-    color: "#333",
-  },
-  clueText: {
-    fontSize: 8,
-    fontWeight: "500",
-    color: "#1976D2",
-  },
-  letterText: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#333",
-  },
-  specialText: {
-    fontSize: 16,
-    fontWeight: "bold",
-    color: "white",
-  },
-  letterDeckContainer: {
-    alignItems: "center",
-    paddingVertical: 5,
-  },
-  letterDeck: {
-    flexDirection: "row",
-    justifyContent: "center",
-    paddingVertical: 8,
-    paddingHorizontal: 15,
-  },
-  letterTile: {
-    backgroundColor: "#F5DEB3",
-    width: 45,
-    height: 45,
-    borderRadius: 8,
-    justifyContent: "center",
-    alignItems: "center",
-    marginHorizontal: 5,
-    borderWidth: 2,
-    borderColor: "#D2B48C",
-  },
-  selectedLetterTile: {
-    backgroundColor: "#FFD700",
-    borderColor: "#FFA500",
-    transform: [{ scale: 1.1 }],
-  },
-  letterTileText: {
-    fontSize: 20,
-    fontWeight: "bold",
-    color: "#8B4513",
-  },
-  refillButton: {
-    backgroundColor: "#4CAF50",
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 20,
-    marginTop: 10,
-  },
-  refillButtonText: {
-    color: "white",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  actionButtons: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    paddingHorizontal: 30,
-    paddingVertical: 10,
-  },
-  shuffleButton: {
-    backgroundColor: "#007AFF",
-    width: 50,
-    height: 50,
-    borderRadius: 20,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  shuffleButtonText: {
-    fontSize: 16,
-  },
-  passButton: {
-    backgroundColor: "#007AFF",
-    paddingHorizontal: 30,
-    paddingVertical: 10,
-    borderRadius: 20,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  passButtonText: {
-    color: "white",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  hintButton: {
-    backgroundColor: "#007AFF",
-    width: 50,
-    height: 50,
-    borderRadius: 20,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  hintButtonText: {
-    fontSize: 18,
-  },
-  completedContainer: {
-    backgroundColor: "#4CAF50",
-    marginHorizontal: 20,
-    borderRadius: 10,
-    padding: 15,
-    marginBottom: 10,
-    alignItems: "center",
-  },
-  completedTitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "white",
-    marginBottom: 5,
-  },
-  completedText: {
-    fontSize: 14,
-    color: "white",
-    textAlign: "center",
-  },
-  historyContainer: {
-    backgroundColor: "white",
-    marginHorizontal: 20,
-    borderRadius: 10,
-    padding: 15,
-    marginBottom: 10,
-    maxHeight: 100,
-  },
-  historyTitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#333",
-    marginBottom: 5,
-  },
-  historyScroll: {
-    maxHeight: 60,
-  },
-  historyText: {
-    fontSize: 12,
-    color: "#666",
-    marginBottom: 2,
-  },
-  resetButton: {
-    backgroundColor: "#e67e22",
-    marginHorizontal: 20,
-    paddingVertical: 15,
-    borderRadius: 25,
-    alignItems: "center",
-    marginBottom: 20,
-  },
-  resetButtonText: {
-    color: "white",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-})

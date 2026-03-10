@@ -1,45 +1,71 @@
-/**
- * Sample React Native App
- * https://github.com/facebook/react-native
- *
- * @format
- */
+// import React, { useEffect } from 'react';
+// import { GestureHandlerRootView } from 'react-native-gesture-handler';
+// import AppNavigator from './src/navigation/AppNavigator';
+// import mobileAds from 'react-native-google-mobile-ads';
+// import { ADMOB_APP_ID } from './src/ads/adsConfig';
 
-import { NewAppScreen } from '@react-native/new-app-screen';
-import { StatusBar, StyleSheet, useColorScheme, View } from 'react-native';
-import {
-  SafeAreaProvider,
-  useSafeAreaInsets,
-} from 'react-native-safe-area-context';
+// export default function App() {
 
-function App() {
-  const isDarkMode = useColorScheme() === 'dark';
+//   useEffect(() => {
+//     mobileAds()
+//       .initialize()
+//       .then(adapterStatuses => {
+//         console.log('AdMob initialized', adapterStatuses);
+//       })
+//       .catch(e => console.warn('AdMob init error', e));
+//   }, []);
+
+  
+//   return (
+//     <GestureHandlerRootView style={{ flex: 1 }}>
+//       <AppNavigator />
+//     </GestureHandlerRootView>
+//   );
+// }
+
+// App.tsx
+import React, { useEffect } from 'react';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import AppNavigator from './src/navigation/AppNavigator';
+import mobileAds from 'react-native-google-mobile-ads';
+import { GameProvider } from './src/context/GameContext';
+import { ensureSignedInAnonymously } from './src/firebase';
+import { ProfileProvider } from './src/context/ProfileContext';
+import InGameBanner from './src/components/InGameBanner';
+import SplashScreen from 'react-native-splash-screen';
+
+export default function App() {
+  useEffect(() => {
+    setTimeout (() => {
+      SplashScreen.hide()
+    },500)
+  })
+  useEffect(() => {
+    (async () => {
+      try {
+        // sign in anonymously (ensures auth is available for RTDB rules)
+        await ensureSignedInAnonymously();
+      } catch (e) {
+        console.warn('ensureSignedInAnonymously failed', e);
+      }
+
+      try {
+        const adapterStatuses = await mobileAds().initialize();
+        console.log('AdMob initialized', adapterStatuses);
+      } catch (e) {
+        console.warn('AdMob init error', e);
+      }
+    })();
+  }, []);
 
   return (
-    <SafeAreaProvider>
-      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
-      <AppContent />
-    </SafeAreaProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ProfileProvider>
+      <GameProvider>
+        <InGameBanner />
+        <AppNavigator />
+      </GameProvider>
+      </ProfileProvider>
+    </GestureHandlerRootView>
   );
 }
-
-function AppContent() {
-  const safeAreaInsets = useSafeAreaInsets();
-
-  return (
-    <View style={styles.container}>
-      <NewAppScreen
-        templateFileName="App.tsx"
-        safeAreaInsets={safeAreaInsets}
-      />
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-});
-
-export default App;

@@ -1,4 +1,7 @@
 {
   "name": "CrosswordApp",
-  "displayName": "CrosswordApp"
+  "displayName": "CrosswordApp",
+  "react-native-google-mobile-ads": {
+    "android_app_id": "ca-app-pub-7500474458725523~2161674221"
+  }
 }
